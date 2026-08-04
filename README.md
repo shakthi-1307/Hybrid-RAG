@@ -30,16 +30,16 @@ upload ──► loader ──► chunker ──► metadata ──► embedder 
                        overlapped)  schema)                 status
 ```
 
-| Stage | File | Responsibility |
-|---|---|---|
-| Load | `ingestion/loaders/pdf_loader.py`, `markdown_loader.py` | Raw file → ordered `Section`s carrying a heading path |
-| Route | `ingestion/loaders/registry.py` | Extension → loader; the only place formats are declared |
-| Count | `ingestion/tokenizer.py` | Token counts from the *embedding model's own* tokenizer |
-| Chunk | `ingestion/chunker.py` | Greedy sentence packing to `CHUNK_TARGET_TOKENS`, `CHUNK_OVERLAP_TOKENS` tail carried forward, never across a section |
-| Describe | `ingestion/metadata.py` | The flat, versioned Chroma metadata schema + heading-path codec |
-| Embed | `ingestion/embedder.py` | BGE passage/query asymmetry, dimension guard |
-| Store | `stores/vector_store.py`, `stores/document_repository.py` | Chroma writes; Postgres writes |
-| Orchestrate | `ingestion/pipeline.py` | Wires the stages, owns status transitions and failure handling |
+| Stage       | File                                                      | Responsibility                                                                                                        |
+| ----------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Load        | `ingestion/loaders/pdf_loader.py`, `markdown_loader.py`   | Raw file → ordered `Section`s carrying a heading path                                                                 |
+| Route       | `ingestion/loaders/registry.py`                           | Extension → loader; the only place formats are declared                                                               |
+| Count       | `ingestion/tokenizer.py`                                  | Token counts from the _embedding model's own_ tokenizer                                                               |
+| Chunk       | `ingestion/chunker.py`                                    | Greedy sentence packing to `CHUNK_TARGET_TOKENS`, `CHUNK_OVERLAP_TOKENS` tail carried forward, never across a section |
+| Describe    | `ingestion/metadata.py`                                   | The flat, versioned Chroma metadata schema + heading-path codec                                                       |
+| Embed       | `ingestion/embedder.py`                                   | BGE passage/query asymmetry, dimension guard                                                                          |
+| Store       | `stores/vector_store.py`, `stores/document_repository.py` | Chroma writes; Postgres writes                                                                                        |
+| Orchestrate | `ingestion/pipeline.py`                                   | Wires the stages, owns status transitions and failure handling                                                        |
 
 A chunk never crosses a heading boundary, which is what makes the citation
 `document → section → page` trustworthy rather than approximate.
@@ -87,12 +87,12 @@ account and a wrong password, so the form cannot be used to enumerate accounts.
 **Isolation is enforced in four independent places**, so no single mistake
 exposes another user's data:
 
-| Layer | Mechanism |
-|---|---|
-| Chroma | `where={"owner_id": ...}` applied *before* the nearest-neighbour cut, so a filtered query returns the best matches within the filter — not the filtered remains of a global top-N |
-| BM25 | One shared index (stable IDF) filtered by owner *before* truncation to `BM25_CANDIDATE_COUNT` |
-| Postgres reads | Every repository query carries `owner_id` in its `WHERE` clause; ownership is enforced by the query, not by the caller |
-| Hydration | `get_chunks_by_ids` re-checks ownership even though both searches already filtered, so a future change to either search cannot become a leak |
+| Layer          | Mechanism                                                                                                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Chroma         | `where={"owner_id": ...}` applied _before_ the nearest-neighbour cut, so a filtered query returns the best matches within the filter — not the filtered remains of a global top-N |
+| BM25           | One shared index (stable IDF) filtered by owner _before_ truncation to `BM25_CANDIDATE_COUNT`                                                                                     |
+| Postgres reads | Every repository query carries `owner_id` in its `WHERE` clause; ownership is enforced by the query, not by the caller                                                            |
+| Hydration      | `get_chunks_by_ids` re-checks ownership even though both searches already filtered, so a future change to either search cannot become a leak                                      |
 
 Another user's document or chat session returns 404, not 403 — existence itself
 is not disclosed. Uploads are deduplicated **per owner**, so two users
@@ -137,7 +137,7 @@ hybrid-rag/
                       MessageBubble · CitationList · Composer · DocumentPanel
 ```
 
-`App.jsx` only decides *which* of `LoginPage` or `Workspace` to render.
+`App.jsx` only decides _which_ of `LoginPage` or `Workspace` to render.
 `Workspace` is where `useChat` and `useDocuments` live, so those hooks never
 fire a request while signed out. It is keyed on the user id, which discards
 every cached document and conversation when the account changes.
@@ -222,40 +222,18 @@ downloading a tokenizer.
 
 ## API
 
-All routes except `/health`, `/auth/register`, and `/auth/login` require the
-session cookie.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `GET` | `/api/v1/health` | DB reachability, vector count, BM25 corpus size (public) |
-| `POST` | `/api/v1/auth/register` | Create an account; sets the session cookie |
-| `POST` | `/api/v1/auth/login` | Sign in; sets the session cookie |
-| `POST` | `/api/v1/auth/logout` | Clear the session cookie |
-| `GET` | `/api/v1/auth/me` | The signed-in account, used to restore a session on page load |
-| `POST` | `/api/v1/documents` | Upload (`multipart/form-data`); ingests in background, returns `202` |
-| `GET` | `/api/v1/documents` | Registry with per-document ingestion status |
-| `DELETE` | `/api/v1/documents/{id}` | Removes rows, vectors, the file, and rebuilds BM25 |
-| `POST` | `/api/v1/chat/sessions` | Create a conversation |
-| `GET` | `/api/v1/chat/sessions` | List conversations, most recently used first |
-| `DELETE` | `/api/v1/chat/sessions/{id}` | Delete a conversation and its history |
-| `GET` | `/api/v1/chat/sessions/{id}/messages` | Full persisted transcript with citations |
-| `POST` | `/api/v1/chat/sessions/{id}/query` | Ask; returns the assistant turn + citations |
-
-Uploads are deduplicated by SHA-256, so re-uploading the same file returns the
-existing document instead of re-indexing it.
-
 ---
 
 ## Tuning notes
 
-| Setting | Effect |
-|---|---|
-| `CHUNK_TARGET_TOKENS` | Larger → more context per hit, fuzzier citations. 512 matches the BGE input window. |
-| `CHUNK_OVERLAP_TOKENS` | Guards against answers split across a chunk boundary. |
-| `RRF_K` | Higher flattens the contribution of top ranks; 60 is the value from the original RRF paper. |
-| `RRF_BM25_WEIGHT` | Below 1.0 favours semantic matching. Raise it for corpora full of exact identifiers, part numbers, or code. |
-| `VECTOR_CANDIDATE_COUNT` / `BM25_CANDIDATE_COUNT` | Fusion can only rerank what it is given — widen these before widening `TOP_K`. |
-| `GROQ_TEMPERATURE` | Kept at 0.1: grounded answering wants determinism, not variety. |
+| Setting                                           | Effect                                                                                                      |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `CHUNK_TARGET_TOKENS`                             | Larger → more context per hit, fuzzier citations. 512 matches the BGE input window.                         |
+| `CHUNK_OVERLAP_TOKENS`                            | Guards against answers split across a chunk boundary.                                                       |
+| `RRF_K`                                           | Higher flattens the contribution of top ranks; 60 is the value from the original RRF paper.                 |
+| `RRF_BM25_WEIGHT`                                 | Below 1.0 favours semantic matching. Raise it for corpora full of exact identifiers, part numbers, or code. |
+| `VECTOR_CANDIDATE_COUNT` / `BM25_CANDIDATE_COUNT` | Fusion can only rerank what it is given — widen these before widening `TOP_K`.                              |
+| `GROQ_TEMPERATURE`                                | Kept at 0.1: grounded answering wants determinism, not variety.                                             |
 
 Changing `EMBEDDING_MODEL_NAME` invalidates the existing index. `Embedder`
 refuses to start if the model's dimension disagrees with `EMBEDDING_DIMENSION`,
