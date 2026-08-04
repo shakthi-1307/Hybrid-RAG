@@ -1,0 +1,27 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic[email]==2.10.4
+pydantic-settings==2.7.0
+
+pyjwt==2.10.1
+bcrypt==4.2.1
+
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+alembic==1.14.0
+
+chromadb==0.5.23
+sentence-transformers==3.3.1
+rank-bm25==0.2.2
+pymupdf==1.25.1
+
+# chromadb 0.5.x caps tokenizers at <=0.20.3, and transformers >=4.47 requires
+# tokenizers >=0.21. 4.46.3 is the newest transformers that stays inside that
+# cap. Bumping transformers means bumping chromadb to 1.x first, which changes
+# the persisted index format and requires re-ingesting every document.
+transformers==4.46.3
+tokenizers==0.20.3
+
+langgraph==0.2.60
+groq==0.13.1

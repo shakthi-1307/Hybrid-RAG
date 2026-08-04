@@ -1,152 +1,262 @@
-# RAG
+# Hybrid RAG
 
-Built a simple RAG system using Python and Vanilla JavaScript, it allows users to chat with PDF documents using local LLMs (Ollama) and embeddings (Sentence Transformers) without any API costs or data egress. Features a FastAPI backend, persistent vector storage (ChromaDB), and a lightweight custom frontend
+Structure-aware ingestion + hybrid retrieval (BM25 × dense, fused with Reciprocal
+Rank Fusion) behind a LangGraph pipeline that returns answers with verifiable
+citations down to the document section and page.
 
-# Demo
+Multi-user: each account has its own private knowledge base and its own chat
+history. Documents, chunks, vectors, and conversations are all owner-scoped.
 
-## ![Project Screenshot](image-1.png)
-
-## ![Project Screenshot 2](image-2.png)
-
-## 🛠️ Tech Stack
-
-| Component         | Technology                        | Why?                               |
-| ----------------- | --------------------------------- | ---------------------------------- |
-| **Backend**       | FastAPI, Python 3.9+              | Async support, auto docs, fast     |
-| **Frontend**      | HTML, CSS, JavaScript             | No framework overhead, lightweight |
-| **LLM**           | Ollama (Llama 3.1 8B)             | Local inference, privacy           |
-| **Embeddings**    | Sentence Transformers (BGE-small) | Best free embedding model          |
-| **Vector DB**     | ChromaDB                          | Persistent, no server setup        |
-| **Orchestration** | LangChain                         | Industry standard for RAG          |
-| **PDF Parsing**   | PyPDF                             | Pure Python, no dependencies       |
+- **Backend** — FastAPI, SQLAlchemy 2, Alembic
+- **Auth** — bcrypt + JWT in an httpOnly cookie
+- **Vectors** — ChromaDB (persistent, cosine)
+- **Lexical** — rank_bm25, rebuilt from Postgres on every corpus mutation
+- **Embeddings** — `BAAI/bge-small-en-v1.5`, local, CPU, 384-dim
+- **Generation** — Groq (`llama-3.3-70b-versatile`)
+- **System of record** — Postgres: documents, chunks, chat sessions, message history
+- **Frontend** — React 18 + Vite
 
 ---
 
-## 🧠 How It Works
+## Architecture
 
-1. Upload PDF
-2. Extract and split text into chunks
-3. Generate embeddings (Sentence Transformers)
-4. Store in ChromaDB
-5. User query → embedding → similarity search
-6. Relevant chunks + query → LLM (Ollama)
-7. Response generated
+### Phase 1 — Ingestion
 
----
-
-## 📦 Installation
-
-### 🔧 Prerequisites
-
-Make sure you have the following installed:
-
-- **Python 3.9+**
-- **Ollama** ([Download](https://ollama.com))
-- **Git**
-
----
-
-### 1️⃣ Clone the Repository
-
-```bash
-git clone https://github.com/shakthi-1307/rag-project.git
-cd rag-project
+```
+upload ──► loader ──► chunker ──► metadata ──► embedder ──► Chroma
+             │           │           │                        │
+        (heading      (token-      (flat,                 Postgres
+         hierarchy)    bounded,     versioned              chunks +
+                       overlapped)  schema)                 status
 ```
 
----
+| Stage | File | Responsibility |
+|---|---|---|
+| Load | `ingestion/loaders/pdf_loader.py`, `markdown_loader.py` | Raw file → ordered `Section`s carrying a heading path |
+| Route | `ingestion/loaders/registry.py` | Extension → loader; the only place formats are declared |
+| Count | `ingestion/tokenizer.py` | Token counts from the *embedding model's own* tokenizer |
+| Chunk | `ingestion/chunker.py` | Greedy sentence packing to `CHUNK_TARGET_TOKENS`, `CHUNK_OVERLAP_TOKENS` tail carried forward, never across a section |
+| Describe | `ingestion/metadata.py` | The flat, versioned Chroma metadata schema + heading-path codec |
+| Embed | `ingestion/embedder.py` | BGE passage/query asymmetry, dimension guard |
+| Store | `stores/vector_store.py`, `stores/document_repository.py` | Chroma writes; Postgres writes |
+| Orchestrate | `ingestion/pipeline.py` | Wires the stages, owns status transitions and failure handling |
 
-### 2️⃣ Install Ollama & Pull Model
+A chunk never crosses a heading boundary, which is what makes the citation
+`document → section → page` trustworthy rather than approximate.
 
-```bash
-# Start Ollama (if not already running)
-ollama serve
+### Phase 2 — Retrieval & answering
 
-# Pull the Llama 3.1 model (one-time setup ~4.7GB)
-ollama pull llama3.1
+```
+question
+   │
+   ├─► vector_search  (BGE query embedding → Chroma, top VECTOR_CANDIDATE_COUNT)
+   └─► bm25_search    (in-memory BM25Okapi, top BM25_CANDIDATE_COUNT)
+                 │
+                 ▼
+          fusion.py — RRF:  score(d) = Σ  w_s / (k + rank_s(d))
+                 │
+                 ▼
+      hybrid_retriever — take TOP_K, hydrate from Postgres
+                 │
+                 ▼
+   LangGraph:  retrieve ─┬─(hits)──► generate ──► cite ──► END
+                         └─(none)──► fallback ──────────► END
 ```
 
+RRF is used rather than score normalisation because cosine similarity and BM25
+scores live on incompatible scales; ranks are all they need to have in common.
+
+The `cite` node validates every `[n]` marker the model emitted against the
+context block that was actually sent. Markers pointing at sources that were not
+supplied are dropped, so a hallucinated citation cannot reach the UI.
+
 ---
 
-### 3️⃣ Install Python Dependencies
+## Authentication and data isolation
+
+Sign-in issues a JWT delivered as an **httpOnly, SameSite=Lax cookie**. The
+token is never reachable from JavaScript, so an XSS payload cannot exfiltrate a
+session. The frontend sends `credentials: 'include'` on every request and never
+handles the token itself.
+
+Passwords are bcrypt-hashed at `BCRYPT_ROUNDS` cost. Inputs longer than 72
+bytes are rejected rather than silently truncated, which is what bcrypt would
+otherwise do. Login answers "Incorrect email or password" for both a missing
+account and a wrong password, so the form cannot be used to enumerate accounts.
+
+**Isolation is enforced in four independent places**, so no single mistake
+exposes another user's data:
+
+| Layer | Mechanism |
+|---|---|
+| Chroma | `where={"owner_id": ...}` applied *before* the nearest-neighbour cut, so a filtered query returns the best matches within the filter — not the filtered remains of a global top-N |
+| BM25 | One shared index (stable IDF) filtered by owner *before* truncation to `BM25_CANDIDATE_COUNT` |
+| Postgres reads | Every repository query carries `owner_id` in its `WHERE` clause; ownership is enforced by the query, not by the caller |
+| Hydration | `get_chunks_by_ids` re-checks ownership even though both searches already filtered, so a future change to either search cannot become a leak |
+
+Another user's document or chat session returns 404, not 403 — existence itself
+is not disclosed. Uploads are deduplicated **per owner**, so two users
+uploading the same file each get their own document; the file on disk is shared
+and only unlinked once no document anywhere references its checksum.
+
+`/api/v1/health` is deliberately public and reports only global counts — it is
+the Docker healthcheck probe. Everything else requires a session.
+
+---
+
+## Layout
+
+```
+hybrid-rag/
+├─ docker-compose.yml
+├─ .env.example
+└─ backend/
+   ├─ alembic/                     migrations
+   ├─ tests/
+   └─ app/
+      ├─ config.py                 EVERY tunable constant, declared once
+      ├─ errors.py                 domain exceptions → HTTP statuses
+      ├─ logging_config.py
+      ├─ main.py                   app assembly + lifespan only
+      ├─ db/          session.py · models.py
+      ├─ security/    password.py (bcrypt) · tokens.py (JWT)
+      ├─ schemas/     auth · document · chat · ingestion · retrieval · health
+      ├─ ingestion/   tokenizer · chunker · metadata · embedder · pipeline
+      │  └─ loaders/  base · pdf_loader · markdown_loader · registry
+      ├─ stores/      vector_store · document_repository · chat_repository · user_repository
+      ├─ retrieval/   vector_search · bm25_search · fusion · hybrid_retriever · index_builder
+      ├─ generation/  prompt · llm · citations
+      ├─ graph/       state · nodes · pipeline
+      └─ api/         deps.py + routes/{auth,documents,chat,health}.py
+└─ frontend/
+   └─ src/
+      ├─ config.js                 every frontend constant
+      ├─ api/client.js             the only module that calls fetch
+      ├─ hooks/       useAuth · useChat · useDocuments
+      └─ components/  LoginPage · Workspace · SessionSidebar · ChatWindow
+                      MessageBubble · CitationList · Composer · DocumentPanel
+```
+
+`App.jsx` only decides *which* of `LoginPage` or `Workspace` to render.
+`Workspace` is where `useChat` and `useDocuments` live, so those hooks never
+fire a request while signed out. It is keyed on the user id, which discards
+every cached document and conversation when the account changes.
+
+**One responsibility per file.** The chunker does not embed. The embedder does
+not store. The retriever does not score — `bm25_search` and `vector_search`
+score, `fusion` merges, `hybrid_retriever` only coordinates. `pipeline.py`
+files contain wiring and error handling, never algorithms.
+
+**No magic numbers.** `backend/app/config.py` and `frontend/src/config.js` are
+the only files containing literals that a reader might want to change.
+
+---
+
+## Running it
+
+```bash
+cp .env.example .env
+# put a real GROQ_API_KEY in .env  (https://console.groq.com/keys)
+# and a real JWT_SECRET_KEY:
+#   python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+docker compose up --build
+```
+
+Open the UI and register — the first screen is sign-in / create-account.
+
+> **Upgrading from the pre-auth version:** migration `0002` deletes existing
+> documents and chats, because rows created before accounts existed cannot be
+> attributed to an owner. Chroma is a separate store that migrations do not
+> touch, so clear it too: `docker compose down -v`.
+
+Before exposing this beyond localhost, set `AUTH_COOKIE_SECURE=true` (requires
+HTTPS) and a generated `JWT_SECRET_KEY`.
+
+- UI — http://localhost:5173
+- API docs — http://localhost:8000/docs
+- Health — http://localhost:8000/api/v1/health
+
+The UI calls the API at the **relative** path `/api/v1`; nginx proxies it to
+the `api` service. Same origin means no CORS preflight and a first-party
+session cookie — `http://127.0.0.1:5173` and `http://localhost:5173` both work,
+which they would not with a cross-origin API URL. `vite.config.js` mirrors the
+same proxy so `npm run dev` behaves identically.
+
+Migrations run automatically on API start (`entrypoint.sh`). The first ingest
+downloads the embedding model (~130 MB) into the `rag-data` volume, so the very
+first upload is slower than subsequent ones.
+
+### Local development
 
 ```bash
 cd backend
-pip install -r requirements.txt
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements-dev.txt
+export DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag
+alembic upgrade head
+uvicorn app.main:app --reload
 ```
-
----
-
-### 4️⃣ Create Required Directories
-
-```bash
-mkdir -p data/uploaded
-mkdir -p data/sample_docs
-touch data/uploaded/.gitkeep
-```
-
----
-
-## 🏃 Running the Project
-
-Open **3 terminals** and run the following:
-
-### 🖥️ Terminal 1 – Start Backend
-
-```bash
-cd backend
-python main.py
-```
-
----
-
-### 🌐 Terminal 2 – Start Frontend
 
 ```bash
 cd frontend
-python -m http.server 3000
+npm install
+npm run dev
 ```
 
----
-
-### ⚙️ Terminal 3 – Run Ollama
+### Checks
 
 ```bash
-ollama serve
+cd backend
+pytest    # chunking, fusion, citations, metadata, loader, prompt,
+          # JWT signing/expiry, bcrypt, BM25 owner isolation
+ruff check .
+vulture app --min-confidence 80    # dead-code sweep
 ```
 
----
-
-### 🌍 Open in Browser
-
-```
-http://localhost:3000
-```
+The test suite is deliberately offline: the chunker tests inject a
+word-counting `TokenCounter` so packing behaviour is asserted without
+downloading a tokenizer.
 
 ---
 
-🏗️ Architecture
-[ User Browser ] <--HTTP--> [ FastAPI Backend ] <--Local--> [ Ollama ]
-^ |
-| v
-| [ ChromaDB ]
-| ^
-| |
-+-------- [ Upload PDF ] ------+
+## API
+
+All routes except `/health`, `/auth/register`, and `/auth/login` require the
+session cookie.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/v1/health` | DB reachability, vector count, BM25 corpus size (public) |
+| `POST` | `/api/v1/auth/register` | Create an account; sets the session cookie |
+| `POST` | `/api/v1/auth/login` | Sign in; sets the session cookie |
+| `POST` | `/api/v1/auth/logout` | Clear the session cookie |
+| `GET` | `/api/v1/auth/me` | The signed-in account, used to restore a session on page load |
+| `POST` | `/api/v1/documents` | Upload (`multipart/form-data`); ingests in background, returns `202` |
+| `GET` | `/api/v1/documents` | Registry with per-document ingestion status |
+| `DELETE` | `/api/v1/documents/{id}` | Removes rows, vectors, the file, and rebuilds BM25 |
+| `POST` | `/api/v1/chat/sessions` | Create a conversation |
+| `GET` | `/api/v1/chat/sessions` | List conversations, most recently used first |
+| `DELETE` | `/api/v1/chat/sessions/{id}` | Delete a conversation and its history |
+| `GET` | `/api/v1/chat/sessions/{id}/messages` | Full persisted transcript with citations |
+| `POST` | `/api/v1/chat/sessions/{id}/query` | Ask; returns the assistant turn + citations |
+
+Uploads are deduplicated by SHA-256, so re-uploading the same file returns the
+existing document instead of re-indexing it.
 
 ---
 
-🤝 Contributing
-Fork the repository
-Create a feature branch (git checkout -b feature/amazing-feature)
-Commit your changes (git commit -m 'Add amazing feature')
-Push to the branch (git push origin feature/amazing-feature)
-Open a Pull Request
+## Tuning notes
 
----
+| Setting | Effect |
+|---|---|
+| `CHUNK_TARGET_TOKENS` | Larger → more context per hit, fuzzier citations. 512 matches the BGE input window. |
+| `CHUNK_OVERLAP_TOKENS` | Guards against answers split across a chunk boundary. |
+| `RRF_K` | Higher flattens the contribution of top ranks; 60 is the value from the original RRF paper. |
+| `RRF_BM25_WEIGHT` | Below 1.0 favours semantic matching. Raise it for corpora full of exact identifiers, part numbers, or code. |
+| `VECTOR_CANDIDATE_COUNT` / `BM25_CANDIDATE_COUNT` | Fusion can only rerank what it is given — widen these before widening `TOP_K`. |
+| `GROQ_TEMPERATURE` | Kept at 0.1: grounded answering wants determinism, not variety. |
 
-## 📬 Contact
-
-- **Shakthi Chellappan**
-- 📧 rmshakthichellappan@gmail.com
-- 🔗 LinkedIn: https://www.linkedin.com/in/shakthichellappan/
-- 💻 GitHub: https://github.com/shakthi-1307
+Changing `EMBEDDING_MODEL_NAME` invalidates the existing index. `Embedder`
+refuses to start if the model's dimension disagrees with `EMBEDDING_DIMENSION`,
+which turns a silent retrieval-quality collapse into a startup error.
