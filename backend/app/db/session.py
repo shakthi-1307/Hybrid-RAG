@@ -6,9 +6,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.db.url import build_database_url
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    build_database_url(),
     pool_size=settings.DB_POOL_SIZE,
     max_overflow=settings.DB_MAX_OVERFLOW,
     pool_recycle=settings.DB_POOL_RECYCLE_SECONDS,

@@ -14,7 +14,11 @@ from app.api.deps import get_current_user, get_db
 from app.config import settings
 from app.db.models import User
 from app.db.session import SessionFactory
-from app.errors import DocumentTooLargeError, ResourceNotFoundError
+from app.errors import (
+    DocumentTooLargeError,
+    QuotaExceededError,
+    ResourceNotFoundError,
+)
 from app.ingestion.loaders.registry import get_loader
 from app.ingestion.pipeline import ingest_document
 from app.retrieval.index_builder import refresh_bm25_index
@@ -54,6 +58,33 @@ def _store_upload(upload: UploadFile) -> tuple[Path, int, str]:
     return final_path, byte_size, checksum
 
 
+def _discard_upload(file_path: Path, checksum: str, db: Session) -> None:
+    """Remove a staged file, unless another user's document shares its bytes.
+
+    Files on disk are named by checksum and therefore shared across owners, so
+    an unconditional unlink here would delete somebody else's document.
+    """
+    if not document_repository.checksum_in_use(db, checksum):
+        file_path.unlink(missing_ok=True)
+
+
+def _enforce_quota(db: Session, owner_id: UUID, incoming_bytes: int) -> None:
+    document_count, used_bytes = document_repository.usage_for_owner(db, owner_id)
+
+    if document_count >= settings.MAX_DOCUMENTS_PER_USER:
+        raise QuotaExceededError(
+            f"You have reached the limit of {settings.MAX_DOCUMENTS_PER_USER} "
+            "documents. Delete one before uploading another."
+        )
+
+    if used_bytes + incoming_bytes > settings.MAX_STORAGE_BYTES_PER_USER:
+        remaining = max(settings.MAX_STORAGE_BYTES_PER_USER - used_bytes, 0)
+        raise QuotaExceededError(
+            f"This upload would exceed your storage limit. "
+            f"{remaining} bytes remaining."
+        )
+
+
 def _run_ingestion(owner_id: UUID, document_id: UUID, file_path: Path) -> None:
     """Background entry point: owns its own database session."""
     with SessionFactory() as session:
@@ -69,12 +100,22 @@ def upload_document(
 ) -> DocumentOut:
     get_loader(file.filename)  # rejects unsupported formats before touching disk
 
+    # Cheap pre-check so an over-quota account is rejected before we spend the
+    # disk write; the real size is only known once the stream has been read.
+    _enforce_quota(db, user.id, incoming_bytes=0)
+
     file_path, byte_size, checksum = _store_upload(file)
 
     existing = document_repository.find_by_checksum(db, user.id, checksum)
     if existing is not None:
         logger.info("Upload %s already ingested as %s", file.filename, existing.id)
         return DocumentOut.model_validate(existing)
+
+    try:
+        _enforce_quota(db, user.id, incoming_bytes=byte_size)
+    except QuotaExceededError:
+        _discard_upload(file_path, checksum, db)
+        raise
 
     document = document_repository.create_document(
         db,
@@ -122,10 +163,5 @@ def delete_document(
     )
 
     document_repository.delete_document(db, document)
-
-    # Two users uploading identical bytes share one file on disk, so it is only
-    # safe to unlink once no document anywhere still references that checksum.
-    if not document_repository.checksum_in_use(db, checksum):
-        stored_file.unlink(missing_ok=True)
-
+    _discard_upload(stored_file, checksum, db)
     refresh_bm25_index(db)

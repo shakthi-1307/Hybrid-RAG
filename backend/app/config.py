@@ -10,7 +10,6 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -38,24 +37,58 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------- storage
     UPLOAD_DIR: Path = Path("/data/uploads")
     CHROMA_DIR: Path = Path("/data/chroma")
-    DATABASE_URL: str = "postgresql+psycopg://rag:rag@postgres:5432/rag"
+    # Two ways in, checked in this order by app.db.url:
+    #   1. DATABASE_URL — a complete URL, which is what managed platforms hand
+    #      you. Used verbatim.
+    #   2. POSTGRES_* parts — assembled with SQLAlchemy's URL.create, which
+    #      escapes the password properly. Never format a password into a URL by
+    #      hand: @ : / and % all carry meaning in the authority section, and a
+    #      stray one silently relocates the hostname.
+    DATABASE_DRIVER: str = "postgresql+psycopg"
+    DATABASE_URL: str | None = None
+    POSTGRES_USER: str = "rag"
+    POSTGRES_PASSWORD: str = ""
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "rag"
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_RECYCLE_SECONDS: int = 1800
 
     # ------------------------------------------------------------------ auth
-    # Override JWT_SECRET_KEY in every deployment. The default exists so the
-    # stack boots locally, and is useless to an attacker who cannot read .env.
-    JWT_SECRET_KEY: str = "Shakthi@777"
+    # Required, with no default: read from .env (or the platform's secret
+    # store) or the process refuses to construct its settings at all. There is
+    # deliberately no fallback value that could be shipped by accident.
+    JWT_SECRET_KEY: str
+    JWT_SECRET_MIN_LENGTH: int = 32
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRY_MINUTES: int = 60 * 24 * 7
     AUTH_COOKIE_NAME: str = "rag_session"
-    AUTH_COOKIE_SECURE: bool = True  # set True behind HTTPS
+    # Set false for plain-HTTP local development: browsers silently discard a
+    # Secure cookie sent over http://, which looks like login failing at random.
+    AUTH_COOKIE_SECURE: bool = True
     AUTH_COOKIE_SAMESITE: str = "lax"
     BCRYPT_ROUNDS: int = 12
     PASSWORD_MIN_LENGTH: int = 10
     # bcrypt silently ignores input past 72 bytes, so reject it instead.
     PASSWORD_MAX_BYTES: int = 72
+
+    # ---------------------------------------------------------- rate limiting
+    # How many proxies sit in front of the API. The client IP is taken that
+    # many entries from the right of X-Forwarded-For, so a caller cannot spoof
+    # their identity by sending their own header. Set to 0 if the API is
+    # exposed directly with no proxy.
+    TRUSTED_PROXY_HOPS: int = 1
+    LOGIN_RATE_LIMIT_ATTEMPTS: int = 8
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS: int = 300
+    REGISTER_RATE_LIMIT_ATTEMPTS: int = 5
+    REGISTER_RATE_LIMIT_WINDOW_SECONDS: int = 3600
+    # Bounds the limiter's memory; stale keys are evicted past this many.
+    RATE_LIMIT_MAX_TRACKED_KEYS: int = 10_000
+
+    # ---------------------------------------------------------- per-user caps
+    MAX_DOCUMENTS_PER_USER: int = 100
+    MAX_STORAGE_BYTES_PER_USER: int = 500 * 1024 * 1024
 
     # ------------------------------------------------------------- ingestion
     MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024

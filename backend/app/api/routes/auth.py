@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
@@ -17,6 +17,7 @@ from app.db.models import User
 from app.errors import AuthenticationError, EmailAlreadyRegisteredError
 from app.schemas.auth import Credentials, UserOut
 from app.security.password import hash_password, verify_password
+from app.security.rate_limit import client_identifier, login_limiter, register_limiter
 from app.security.tokens import create_access_token
 from app.stores import user_repository
 
@@ -39,8 +40,15 @@ def _issue_session_cookie(response: Response, user: User) -> None:
 
 @router.post("/register", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def register(
-    payload: Credentials, response: Response, db: Session = Depends(get_db)
+    payload: Credentials,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
 ) -> UserOut:
+    # Limited per source address: signup is the cheapest way to burn disk and
+    # embedding CPU, so it needs a ceiling even though it is a legitimate path.
+    register_limiter.check(client_identifier(request))
+
     if user_repository.find_by_email(db, payload.email) is not None:
         raise EmailAlreadyRegisteredError("That email is already registered.")
 
@@ -54,14 +62,23 @@ def register(
 
 @router.post("/login", response_model=UserOut)
 def login(
-    payload: Credentials, response: Response, db: Session = Depends(get_db)
+    payload: Credentials,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
 ) -> UserOut:
+    # Keyed on address *and* email so one attacker cannot lock out a victim by
+    # hammering their address, and cannot dodge the limit by rotating emails.
+    limiter_key = f"{client_identifier(request)}|{payload.email.lower()}"
+    login_limiter.check(limiter_key)
+
     user = user_repository.find_by_email(db, payload.email)
     # One message for both failure modes: revealing which half was wrong turns
     # the login form into an account-enumeration oracle.
     if user is None or not verify_password(payload.password, user.password_hash):
         raise AuthenticationError("Incorrect email or password.")
 
+    login_limiter.reset(limiter_key)
     _issue_session_cookie(response, user)
     return UserOut.model_validate(user)
 

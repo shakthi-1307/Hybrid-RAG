@@ -16,6 +16,7 @@ from app.db.session import SessionFactory
 from app.errors import AppError
 from app.logging_config import configure_logging
 from app.retrieval.index_builder import refresh_bm25_index
+from app.startup_checks import verify_configuration
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
+    verify_configuration()
     settings.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     settings.CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -50,7 +52,11 @@ app.add_middleware(
 
 @app.exception_handler(AppError)
 async def handle_app_error(_: Request, exc: AppError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.message},
+        headers=exc.headers,
+    )
 
 
 app.include_router(health.router, prefix=settings.API_PREFIX)

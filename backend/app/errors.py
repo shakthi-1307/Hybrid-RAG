@@ -12,9 +12,12 @@ class AppError(Exception):
 
     status_code: int = 400
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, headers: dict[str, str] | None = None) -> None:
         super().__init__(message)
         self.message = message
+        # Merged into the response by the handler in ``app.main`` — lets a
+        # subclass carry protocol detail such as Retry-After.
+        self.headers = headers or {}
 
 
 class UnsupportedFormatError(AppError):
@@ -35,6 +38,17 @@ class AuthenticationError(AppError):
 
 class EmailAlreadyRegisteredError(AppError):
     status_code = 409
+
+
+class QuotaExceededError(AppError):
+    status_code = 403
+
+
+class RateLimitedError(AppError):
+    status_code = 429
+
+    def __init__(self, message: str, retry_after_seconds: int) -> None:
+        super().__init__(message, headers={"Retry-After": str(retry_after_seconds)})
 
 
 class ResourceNotFoundError(AppError):

@@ -102,6 +102,62 @@ and only unlinked once no document anywhere references its checksum.
 `/api/v1/health` is deliberately public and reports only global counts — it is
 the Docker healthcheck probe. Everything else requires a session.
 
+### Abuse limits
+
+`login` is limited per `(client address, email)` — one attacker cannot lock a
+victim out by hammering their address, and cannot dodge the limit by rotating
+emails. A successful sign-in resets the key, so your own typos never lock you
+out. `register` is limited per address, because signup is the cheapest way to
+burn disk and embedding CPU.
+
+The client address comes from `X-Forwarded-For`, read from the right by
+`TRUSTED_PROXY_HOPS`. **Set this to 0 if you expose the API without a proxy** —
+otherwise a caller can prepend their own header and lift their own limit.
+
+Per-account caps (`MAX_DOCUMENTS_PER_USER`, `MAX_STORAGE_BYTES_PER_USER`) are
+checked twice: cheaply before the upload is streamed, and again against the
+real byte count once it is known. `MAX_UPLOAD_BYTES` only bounds a single file;
+without these, one account could fill the volume for everyone.
+
+The limiter is per-process. Behind several API instances the effective limit
+multiplies by the instance count — still a bound, but not exact. Moving to
+Redis is the upgrade path and the call sites do not change.
+
+### Startup refuses to boot insecurely
+
+`JWT_SECRET_KEY` has **no default in code**. It is a required setting, so a
+missing value fails while `Settings` is being constructed — before a single
+route is registered. There is no fallback that could be shipped by accident.
+
+`app/startup_checks.py` then rejects a secret shorter than
+`JWT_SECRET_MIN_LENGTH` (32), because a short HS256 key can be recovered
+offline from one captured token and used to forge a session for any account.
+Insecure cookies and a missing Groq key log loud warnings instead of blocking.
+
+Never hard-code a secret in `config.py` — it is committed. Set it in `.env` or
+your platform's secret store.
+
+### Where secrets live
+
+| Secret | Source of truth | Committed default |
+|---|---|---|
+| `JWT_SECRET_KEY` | `.env` | **none — required**; import fails without it |
+| `GROQ_API_KEY` | `.env` | empty; warns at startup |
+| `POSTGRES_PASSWORD` | `.env` | empty; **compose refuses to start** without it |
+| `DATABASE_URL` | optional override for managed platforms | unset; assembled from `POSTGRES_*` |
+
+The connection URL is built in `app/db/url.py` with SQLAlchemy's
+`URL.create`, which escapes each component. It is never string-formatted, so a
+password containing `@`, `:`, `/` or `%` cannot relocate the hostname — the
+failure mode that produces a baffling `Name or service not known`. Both the API
+and Alembic log the sanitised target (`user@host:port/database`) before
+connecting, so a misconfigured URL is visible immediately.
+
+No file in the repository contains a credential that works against anything.
+`.env` is gitignored; `.env.example` holds placeholders only. If a real secret
+has ever been committed, rotate it — removing it from the working tree does not
+remove it from git history.
+
 ---
 
 ## Layout
@@ -119,7 +175,8 @@ hybrid-rag/
       ├─ logging_config.py
       ├─ main.py                   app assembly + lifespan only
       ├─ db/          session.py · models.py
-      ├─ security/    password.py (bcrypt) · tokens.py (JWT)
+      ├─ startup_checks.py         fail-closed config validation
+      ├─ security/    password.py (bcrypt) · tokens.py (JWT) · rate_limit.py
       ├─ schemas/     auth · document · chat · ingestion · retrieval · health
       ├─ ingestion/   tokenizer · chunker · metadata · embedder · pipeline
       │  └─ loaders/  base · pdf_loader · markdown_loader · registry
@@ -193,7 +250,9 @@ first upload is slower than subsequent ones.
 cd backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-export DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag
+export POSTGRES_PASSWORD=...          # same value as in .env
+export JWT_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+export AUTH_COOKIE_SECURE=false   # required over plain http://localhost
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
@@ -208,8 +267,9 @@ npm run dev
 
 ```bash
 cd backend
-pytest    # chunking, fusion, citations, metadata, loader, prompt,
-          # JWT signing/expiry, bcrypt, BM25 owner isolation
+pytest    # chunking, fusion, citations, metadata, loader, prompt, JWT
+          # signing/expiry, bcrypt, BM25 owner isolation, rate limiting,
+          # startup guards
 ruff check .
 vulture app --min-confidence 80    # dead-code sweep
 ```

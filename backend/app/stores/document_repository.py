@@ -9,7 +9,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import delete as sql_delete
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.db.models import Document, DocumentChunk, IngestionStatus
@@ -71,6 +71,15 @@ def list_documents(session: Session, owner_id: UUID) -> list[Document]:
             .order_by(Document.created_at.desc())
         ).all()
     )
+
+
+def usage_for_owner(session: Session, owner_id: UUID) -> tuple[int, int]:
+    """``(document_count, total_bytes)`` currently held by ``owner_id``."""
+    row = session.execute(
+        select(func.count(Document.id), func.coalesce(func.sum(Document.byte_size), 0))
+        .where(Document.owner_id == owner_id)
+    ).one()
+    return int(row[0]), int(row[1])
 
 
 def set_status(
