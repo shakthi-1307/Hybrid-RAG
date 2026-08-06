@@ -12,7 +12,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file="../.env",
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=True,
@@ -129,6 +129,26 @@ class Settings(BaseSettings):
     RRF_VECTOR_WEIGHT: float = 1.0
     RRF_BM25_WEIGHT: float = 0.8
     TOP_K: int = 6
+
+    # ------------------------------------------------------------- reranking
+    # A bi-encoder embeds query and passage separately and never sees the pair;
+    # a cross-encoder scores them jointly, which orders the shortlist far more
+    # accurately at the cost of one forward pass per candidate. Run the
+    # benchmark (see backend/evaluation) before trusting the default.
+    RERANKER_ENABLED: bool = True
+    RERANKER_MODEL_NAME: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    RERANKER_BATCH_SIZE: int = 32
+    # The shortlist fusion hands downstream. It feeds both the cross-encoder
+    # and diversity selection, so it stays wide even with reranking off —
+    # neither can promote a chunk that was never shortlisted.
+    SHORTLIST_CANDIDATE_COUNT: int = 40
+
+    # ------------------------------------------------------------- diversity
+    # Ceiling on how many of the TOP_K chunks any single document may occupy.
+    # At 3 of 6, a long document cannot crowd every other source out of the
+    # context window — which is what makes "compare A against B" answerable.
+    # Raise it toward TOP_K to favour pure relevance over coverage.
+    MAX_CHUNKS_PER_DOCUMENT: int = 3
 
     # ------------------------------------------------------------ generation
     GROQ_API_KEY: str = ""

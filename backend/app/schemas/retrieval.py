@@ -23,9 +23,14 @@ class RetrievedChunk(BaseModel):
 
 
 class ScoredChunk(BaseModel):
-    """A retrieved chunk plus its fusion provenance."""
+    """A retrieved chunk plus its fusion provenance.
+
+    ``rerank_score`` is None when the cross-encoder is disabled, which is what
+    lets the benchmark tell the two pipelines apart in its output.
+    """
 
     chunk: RetrievedChunk
     fused_score: float
     vector_rank: int | None = None
     bm25_rank: int | None = None
+    rerank_score: float | None = None

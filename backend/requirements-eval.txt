@@ -1,0 +1,9 @@
+# Generation-quality evaluation. Kept out of requirements.txt because it pulls
+# the LangChain stack and pandas — roughly 500 MB the request path never uses.
+#
+# RAGAS changes its public API between minor releases; app/evaluation confines
+# every import of it to evaluation/ragas_adapter.py so an upgrade touches one
+# file. If an import there fails after bumping, that is the file to fix.
+ragas>=0.2,<0.3
+langchain-groq>=0.2,<0.4
+langchain-huggingface>=0.1,<0.4

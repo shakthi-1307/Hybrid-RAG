@@ -1,8 +1,9 @@
 """Hybrid retrieval orchestration.
 
 Runs dense and lexical retrieval independently, fuses their rankings with RRF,
-then hydrates the winners from Postgres. Scoring lives in the search modules;
-fusion maths lives in ``fusion``; this file only coordinates.
+hydrates the shortlist from Postgres, and optionally reorders it with a
+cross-encoder. Scoring lives in the search modules; fusion maths lives in
+``fusion``; reranking lives in ``reranker``. This file only coordinates.
 """
 
 from __future__ import annotations
@@ -12,23 +13,27 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.ingestion.metadata import heading_path_from_string
 from app.retrieval import vector_search
 from app.retrieval.bm25_search import bm25_index
-from app.retrieval.fusion import BM25_SOURCE, VECTOR_SOURCE, reciprocal_rank_fusion
-from app.schemas.retrieval import RetrievedChunk, ScoredChunk
-from app.stores import document_repository
+from app.retrieval.fusion import (
+    BM25_SOURCE,
+    VECTOR_SOURCE,
+    FusedResult,
+    reciprocal_rank_fusion,
+)
+from app.retrieval.diversity import enforce_document_diversity
+from app.retrieval.hydration import hydrate_chunks
+from app.retrieval.reranker import reranker
+from app.schemas.retrieval import ScoredChunk
 
 
-def retrieve(
-    session: Session, query: str, top_k: int, owner_id: UUID
-) -> list[ScoredChunk]:
+def _fuse(query: str, owner_id: UUID) -> list[FusedResult]:
     vector_hits = vector_search.search(
         query, settings.VECTOR_CANDIDATE_COUNT, owner_id
     )
     bm25_hits = bm25_index.search(query, settings.BM25_CANDIDATE_COUNT, owner_id)
 
-    fused = reciprocal_rank_fusion(
+    return reciprocal_rank_fusion(
         ranked_lists={
             VECTOR_SOURCE: [chunk_id for chunk_id, _ in vector_hits],
             BM25_SOURCE: [chunk_id for chunk_id, _ in bm25_hits],
@@ -38,33 +43,60 @@ def retrieve(
             BM25_SOURCE: settings.RRF_BM25_WEIGHT,
         },
         k=settings.RRF_K,
-    )[:top_k]
+    )
 
+
+def _hydrate(
+    session: Session, owner_id: UUID, fused: list[FusedResult]
+) -> list[ScoredChunk]:
     # Both searches already filtered by owner; hydration filters again so a
     # future change to either search cannot turn into a cross-user leak.
-    rows = document_repository.get_chunks_by_ids(
-        session, owner_id, [result.chunk_id for result in fused]
-    )
+    chunks = {
+        chunk.chunk_id: chunk
+        for chunk in hydrate_chunks(
+            session, owner_id, [result.chunk_id for result in fused]
+        )
+    }
 
     scored: list[ScoredChunk] = []
     for result in fused:
-        row = rows.get(result.chunk_id)
-        if row is None:
+        chunk = chunks.get(result.chunk_id)
+        if chunk is None:
             continue
         scored.append(
             ScoredChunk(
-                chunk=RetrievedChunk(
-                    chunk_id=row.id,
-                    document_id=row.document_id,
-                    document_title=row.document.title,
-                    chunk_index=row.chunk_index,
-                    heading_path=heading_path_from_string(row.heading_path),
-                    page_start=row.page_start,
-                    text=row.text,
-                ),
+                chunk=chunk,
                 fused_score=result.score,
                 vector_rank=result.ranks.get(VECTOR_SOURCE),
                 bm25_rank=result.ranks.get(BM25_SOURCE),
             )
         )
     return scored
+
+
+def _rerank(query: str, scored: list[ScoredChunk]) -> list[ScoredChunk]:
+    scores = reranker.score(query, [item.chunk.text for item in scored])
+    for item, score in zip(scored, scores):
+        item.rerank_score = score
+    # Ties break on the fused score, so the ordering stays deterministic.
+    scored.sort(key=lambda item: (-item.rerank_score, -item.fused_score))
+    return scored
+
+
+def retrieve(
+    session: Session, query: str, top_k: int, owner_id: UUID
+) -> list[ScoredChunk]:
+    fused = _fuse(query, owner_id)
+
+    # Fusion only has to get the right chunks into a shortlist. Ordering is
+    # settled afterwards by the cross-encoder, and the final selection by the
+    # diversity cap — neither of which can promote a chunk that fusion never
+    # shortlisted, so the shortlist stays much wider than top_k.
+    scored = _hydrate(session, owner_id, fused[: settings.SHORTLIST_CANDIDATE_COUNT])
+
+    if settings.RERANKER_ENABLED:
+        scored = _rerank(query, scored)
+
+    return enforce_document_diversity(
+        scored, top_k, settings.MAX_CHUNKS_PER_DOCUMENT
+    )

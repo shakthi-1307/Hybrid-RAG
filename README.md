@@ -66,9 +66,110 @@ question
 RRF is used rather than score normalisation because cosine similarity and BM25
 scores live on incompatible scales; ranks are all they need to have in common.
 
+With `RERANKER_ENABLED`, fusion no longer decides the final order — it only has
+to get the right chunks into a shortlist of `SHORTLIST_CANDIDATE_COUNT`, which a
+cross-encoder then reorders. The bi-encoder embeds query and passage
+separately and never compares them directly; the cross-encoder scores the pair
+jointly, which is more accurate at the cost of one forward pass per candidate.
+That is why it only ever runs on a shortlist. Measure it before trusting it —
+see below.
+
+### Document diversity
+
+Pure relevance ranking answers "which chunks best match this query". For a
+comparison — *"how does my resume line up against this job description"* — that
+is the wrong objective. The best six chunks may all come from the longer
+document, and the question then becomes structurally unanswerable no matter how
+good the ranking is.
+
+`MAX_CHUNKS_PER_DOCUMENT` caps how many of the `TOP_K` slots one document may
+occupy (3 of 6 by default), trading a little relevance for the coverage such
+questions need. When there are too few distinct documents to fill the window,
+displaced chunks are backfilled, so a single-document corpus still gets a full
+context block rather than a third of one.
+
+The retrieval benchmark deliberately does **not** apply the cap: its gold set
+asks single-section questions, where capping per-document share can only push
+the correct chunk out. Measuring a coverage feature against a precision
+benchmark would understate it.
+
 The `cite` node validates every `[n]` marker the model emitted against the
 context block that was actually sent. Markers pointing at sources that were not
 supplied are dropped, so a hallucinated citation cannot reach the UI.
+
+---
+
+## Benchmarking retrieval
+
+`backend/evaluation/` is a standalone harness that measures every retrieval
+configuration against a reviewed gold set. It lives outside `app/` because
+none of it belongs on the request path.
+
+```bash
+# 1. draft questions from your ingested corpus (Groq paraphrases them)
+docker compose exec api python -m evaluation generate --email you@example.com
+
+# 2. accept / edit / reject each one — this step is what makes it defensible
+docker compose exec -it api python -m evaluation review
+
+# 3. benchmark all four retrieval configurations
+docker compose exec api python -m evaluation run --email you@example.com
+
+# 4. benchmark answer quality (RAGAS + citation integrity)
+docker compose exec api python -m evaluation generation --email you@example.com
+```
+
+Results are written to `/data/evaluation/results/` as JSON and Markdown.
+
+**What is measured**
+
+| Configuration | What it isolates |
+|---|---|
+| BM25 only | Lexical baseline |
+| Dense only | What a typical RAG implementation ships |
+| Hybrid RRF | Value of fusing the two |
+| Hybrid + cross-encoder | Value of reranking the shortlist |
+
+Per configuration: Hit@k, MRR, nDCG@k, and p50/p95 latency broken out by stage
+(vector, BM25, fusion, hydrate, rerank). Hit rate alone cannot tell rank 1 from
+rank 6 — nDCG is what shows whether reranking improved the *ordering* rather
+than just membership. Latency excludes answer generation, which is bounded by
+the LLM provider rather than by retrieval.
+
+### Generation quality — two independent views
+
+**RAGAS** scores faithfulness, response relevancy, and context precision with
+an LLM judge. The judge is Groq and the embeddings are the same local BGE model
+used for retrieval, so evaluation needs no extra API key and no second
+embedding space. Adding `reference_answer` to gold questions additionally
+enables context recall; without it the harness runs the reference-free subset
+rather than silently reporting nothing.
+
+**Citation integrity** is counted, not judged: how many `[n]` markers the model
+emitted that pointed outside the supplied context, and therefore how often the
+pipeline's guard actually fires. These are exact numbers, and they are the more
+defensible of the two.
+
+They are reported side by side on purpose. If the judge calls an answer
+faithful while the counter shows the model invented a source number, that
+disagreement is the interesting result — and it is the kind of thing a pure
+RAGAS score hides.
+
+> RAGAS changes its public API between minor releases. Every import of it is
+> confined to `evaluation/ragas_adapter.py`, so an upgrade touches one file.
+
+**Two things the harness does deliberately**
+
+*Reports a confidence interval.* At n=30, a hit rate of 90% carries a 95%
+Wilson interval of roughly 74–97%. Quoting the bare number invites a question
+you cannot answer; quoting the interval answers it first.
+
+*Refuses to grade its own homework.* Questions generated from a passage tend to
+quote it, and a quoted question retrieves its source trivially — every
+configuration then scores near 100% and the benchmark measures nothing. The
+drafting prompt forbids reusing distinctive wording, and the review step exists
+because no prompt makes that guarantee reliable. An unreviewed gold set
+measures the generator, not the retriever.
 
 ---
 
@@ -168,6 +269,14 @@ hybrid-rag/
 ├─ .env.example
 └─ backend/
    ├─ alembic/                     migrations
+   ├─ evaluation/                  benchmark harness (not on the request path)
+   │  ├─ generate.py · review.py   gold set drafting and human review
+   │  ├─ metrics.py                Hit@k · MRR · nDCG · Wilson interval
+   │  ├─ citation_metrics.py       exact citation integrity counts
+   │  ├─ configurations.py         the four retrieval ablations
+   │  ├─ ragas_adapter.py          the only file that imports RAGAS
+   │  ├─ answers.py                full-pipeline answer generation
+   │  └─ runner.py · generation_runner.py · report.py
    ├─ tests/
    └─ app/
       ├─ config.py                 EVERY tunable constant, declared once
@@ -181,7 +290,8 @@ hybrid-rag/
       ├─ ingestion/   tokenizer · chunker · metadata · embedder · pipeline
       │  └─ loaders/  base · pdf_loader · markdown_loader · registry
       ├─ stores/      vector_store · document_repository · chat_repository · user_repository
-      ├─ retrieval/   vector_search · bm25_search · fusion · hybrid_retriever · index_builder
+      ├─ retrieval/   vector_search · bm25_search · fusion · reranker
+      │               hybrid_retriever · index_builder
       ├─ generation/  prompt · llm · citations
       ├─ graph/       state · nodes · pipeline
       └─ api/         deps.py + routes/{auth,documents,chat,health}.py

@@ -19,9 +19,20 @@ RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# RAGAS and its LangChain dependencies, used only by the generation benchmark.
+# Build with --build-arg INSTALL_EVAL=false for a slimmer runtime image.
+ARG INSTALL_EVAL=true
+COPY requirements-eval.txt .
+RUN if [ "$INSTALL_EVAL" = "true" ]; then \
+      pip install --no-cache-dir -r requirements-eval.txt; \
+    fi
+
 COPY alembic.ini .
 COPY alembic ./alembic
 COPY app ./app
+# The benchmark harness ships with the image so it can be run against the
+# live database and vector store: docker compose exec api python -m evaluation
+COPY evaluation ./evaluation
 COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
