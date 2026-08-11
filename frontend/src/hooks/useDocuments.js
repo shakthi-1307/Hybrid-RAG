@@ -5,7 +5,9 @@ import { INGESTION_POLL_INTERVAL_MS, PENDING_STATUSES } from '../config.js';
 
 export function useDocuments() {
   const [documents, setDocuments] = useState([]);
-  const [busy, setBusy] = useState(false);
+  // Names of files currently being sent, so a drop of several shows a queue
+  // rather than one opaque "uploading" state.
+  const [uploading, setUploading] = useState([]);
   const [error, setError] = useState(null);
 
   const refresh = useCallback(async () => {
@@ -32,16 +34,27 @@ export function useDocuments() {
   }, [documents, refresh]);
 
   const upload = useCallback(
-    async (file) => {
-      setBusy(true);
+    async (files) => {
+      const queue = Array.from(files);
+      if (queue.length === 0) return;
+
+      setUploading(queue.map((file) => file.name));
       try {
-        await api.uploadDocument(file);
+        // Sequential on purpose: each upload triggers a background ingest that
+        // loads models and embeds. Firing them in parallel would contend for
+        // the same CPU and the same connection pool.
+        for (const file of queue) {
+          try {
+            await api.uploadDocument(file);
+            setError(null);
+          } catch (err) {
+            setError(`${file.name}: ${err.message}`);
+          }
+          setUploading((current) => current.filter((name) => name !== file.name));
+        }
         await refresh();
-        setError(null);
-      } catch (err) {
-        setError(err.message);
       } finally {
-        setBusy(false);
+        setUploading([]);
       }
     },
     [refresh],
@@ -59,5 +72,5 @@ export function useDocuments() {
     [refresh],
   );
 
-  return { documents, busy, error, upload, remove };
+  return { documents, uploading, busy: uploading.length > 0, error, upload, remove };
 }

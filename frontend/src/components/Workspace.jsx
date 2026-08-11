@@ -46,6 +46,7 @@ export function Workspace({ user, onSignOut }) {
 
       <DocumentPanel
         documents={docs.documents}
+        uploading={docs.uploading}
         busy={docs.busy}
         error={docs.error}
         onUpload={docs.upload}

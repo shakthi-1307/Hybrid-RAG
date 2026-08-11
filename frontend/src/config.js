@@ -10,6 +10,22 @@ export const INGESTION_POLL_INTERVAL_MS = 3000;
 
 export const PENDING_STATUSES = ['pending', 'processing'];
 export const READY_STATUS = 'ready';
+
+// Mirrors the registry in backend/app/ingestion/loaders/registry.py. Used by
+// the file picker and to filter what a drag-and-drop actually accepts.
+export const ACCEPTED_EXTENSIONS = ['.pdf', '.md', '.markdown'];
+
+// --- document colour coding --------------------------------------------------
+// Each document gets a stable hue from its id, so a citation visibly belongs to
+// a source. The golden angle spaces successive hashes far apart, which keeps
+// adjacent documents from landing on near-identical colours.
+export const DOCUMENT_HUE_STEP = 137.508;
+export const DOCUMENT_SATURATION = 72;
+export const DOCUMENT_LIGHTNESS = 62;
+
+// --- citation interaction ----------------------------------------------------
+export const CITATION_FLASH_MS = 1600;
+export const SNIPPET_PREVIEW_CHARS = 180;
 export const DEFAULT_SESSION_TITLE = 'New conversation';
 
 // Mirrors PASSWORD_MIN_LENGTH in backend/app/config.py. The backend is the

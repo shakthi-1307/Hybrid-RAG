@@ -1,7 +1,7 @@
 # Folder structure
 
-**47** backend modules · **15** evaluation modules · **14** test files ·
-**19** frontend source files · **2** migrations
+**49** backend modules · **15** evaluation modules · **14** test files ·
+**17** frontend source files · **2** migrations
 
 Two rules hold everywhere: one responsibility per file, and every tunable
 number declared once in a config module and imported. `app/` contains only
@@ -145,6 +145,8 @@ rag-chatbot/
         ├── main.jsx
         ├── App.jsx               chooses LoginPage or Workspace, nothing more
         ├── api/client.js         the only module that calls fetch
+        ├── lib/
+        │   └── documentColor.js  stable hue per document id
         ├── hooks/
         │   ├── useAuth.js        session restore, sign in/up/out
         │   ├── useChat.js        sessions, transcript, ask
@@ -154,8 +156,8 @@ rag-chatbot/
             ├── Workspace.jsx     mounted only when authenticated
             ├── SessionSidebar.jsx
             ├── ChatWindow.jsx
-            ├── MessageBubble.jsx inline citation markers
-            ├── CitationList.jsx  document → section → page
+            ├── MessageBubble.jsx clickable chips + hover preview
+            ├── CitationList.jsx  expandable, colour-coded by source
             ├── Composer.jsx
             └── DocumentPanel.jsx upload + ingestion status
 ```

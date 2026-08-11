@@ -1,15 +1,35 @@
 :root {
-  --bg: #0f1115;
-  --surface: #171a21;
-  --surface-alt: #1e222b;
-  --border: #2a2f3a;
-  --text: #e6e8ee;
-  --muted: #9aa2b1;
-  --accent: #6ea8fe;
-  --danger: #f87171;
-  --ok: #4ade80;
-  --warn: #fbbf24;
-  --radius: 10px;
+  --bg: #0d0f14;
+  --surface: #151821;
+  --surface-alt: #1c2030;
+  --surface-hi: #232839;
+  --border: #2b3145;
+  --text: #e8eaf2;
+  --muted: #9099b0;
+  --accent: #7aa2ff;
+  --accent-2: #b47cff;
+  --accent-3: #38d6c4;
+  --danger: #ff6b81;
+  --ok: #46e0a0;
+  --warn: #ffc857;
+  --radius: 11px;
+
+  /* Overridden per element by documentColorVars(); these are the fallbacks
+     used anywhere a document hue has not been supplied. */
+  --doc-hue: 220;
+  --doc-saturation: 72%;
+  --doc-lightness: 62%;
+}
+
+/* Every document-coloured surface derives from these three, and they in turn
+   derive from the --doc-hue set inline by documentColorVars(). Changing the
+   colour scheme means changing this block and nothing else. */
+.doc-card,
+.citation,
+.inline-marker {
+  --doc: hsl(var(--doc-hue) var(--doc-saturation) var(--doc-lightness));
+  --doc-soft: hsl(var(--doc-hue) var(--doc-saturation) var(--doc-lightness) / 0.16);
+  --doc-line: hsl(var(--doc-hue) var(--doc-saturation) var(--doc-lightness) / 0.42);
 }
 
 * {
@@ -25,12 +45,13 @@ body {
 
 .layout {
   display: grid;
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: 250px 1fr 330px;
   height: 100vh;
 }
 
 /* ---------------------------------------------------------------- panels */
 .panel {
+  position: relative;
   background: var(--surface);
   border-right: 1px solid var(--border);
   padding: 16px;
@@ -40,6 +61,11 @@ body {
 .panel.documents {
   border-right: none;
   border-left: 1px solid var(--border);
+  transition: background 0.15s ease;
+}
+
+.panel.documents.dropping {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
 .panel-header {
@@ -52,8 +78,8 @@ body {
 .panel-header h2 {
   flex: 1;
   margin: 0;
-  font-size: 13px;
-  letter-spacing: 0.08em;
+  font-size: 12px;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -66,10 +92,21 @@ button {
   padding: 6px 12px;
   cursor: pointer;
   font: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.1s ease;
 }
 
 button:hover:not(:disabled) {
   border-color: var(--accent);
+  background: var(--surface-hi);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 button:disabled {
@@ -84,10 +121,18 @@ button:disabled {
   padding: 0 6px;
   font-size: 18px;
   line-height: 1;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+
+.list-item:hover .icon-button,
+.icon-button:focus-visible {
+  opacity: 1;
 }
 
 .icon-button:hover {
   color: var(--danger);
+  background: none;
 }
 
 .list {
@@ -105,19 +150,24 @@ button:disabled {
   gap: 4px;
   border: 1px solid transparent;
   border-radius: var(--radius);
-  padding: 6px 8px;
+  padding: 7px 9px;
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .list-item.column {
   flex-direction: column;
   align-items: stretch;
-  gap: 4px;
-  border-color: var(--border);
+  gap: 5px;
 }
 
-.list-item.active {
+.sessions .list-item:hover {
   background: var(--surface-alt);
-  border-color: var(--accent);
+}
+
+.sessions .list-item.active {
+  background: var(--surface-alt);
+  border-color: transparent;
+  box-shadow: inset 3px 0 0 var(--accent-2);
 }
 
 .list-label {
@@ -131,10 +181,36 @@ button:disabled {
   white-space: nowrap;
 }
 
+.list-label:hover {
+  background: none;
+  border: none;
+}
+
+/* ------------------------------------------------------------- documents */
+.doc-card {
+  background: var(--surface-alt);
+  border-left: 3px solid var(--doc-line);
+}
+
+.doc-card:hover {
+  border-color: transparent;
+  border-left-color: var(--doc);
+  background: var(--surface-hi);
+}
+
 .doc-row {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 8px;
+}
+
+.doc-dot {
+  width: 9px;
+  height: 9px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--doc);
+  box-shadow: 0 0 0 3px var(--doc-soft);
 }
 
 .doc-title {
@@ -142,6 +218,7 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 500;
 }
 
 .doc-error {
@@ -149,27 +226,40 @@ button:disabled {
   color: var(--danger);
 }
 
+.doc-progress {
+  display: block;
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--doc),
+    transparent
+  );
+  background-size: 40% 100%;
+  background-repeat: no-repeat;
+  animation: sweep 1.3s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% { background-position: -40% 0; }
+  100% { background-position: 140% 0; }
+}
+
 .badge {
   align-self: flex-start;
   font-size: 11px;
-  padding: 2px 8px;
+  padding: 2px 9px;
   border-radius: 999px;
-  background: var(--surface-alt);
+  background: var(--surface);
   color: var(--muted);
+  border: 1px solid var(--border);
 }
 
-.badge-ready {
-  color: var(--ok);
-}
-
-.badge-failed {
-  color: var(--danger);
-}
-
+.badge-ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 35%, transparent); }
+.badge-failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
 .badge-pending,
-.badge-processing {
-  color: var(--warn);
-}
+.badge-processing { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 
 .stats {
   margin: 0 0 12px;
@@ -177,10 +267,87 @@ button:disabled {
   color: var(--muted);
 }
 
+.stat-value {
+  color: var(--accent-3);
+  font-weight: 600;
+}
+
+.empty-hint {
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+  padding: 18px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
 .error {
   margin: 8px 0;
   font-size: 13px;
   color: var(--danger);
+}
+
+/* -------------------------------------------------------------- dropzone */
+.dropzone-overlay {
+  position: absolute;
+  inset: 8px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  pointer-events: none;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--bg) 82%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.dropzone-icon {
+  font-size: 26px;
+  color: var(--accent);
+  animation: bob 1.1s ease-in-out infinite;
+}
+
+@keyframes bob {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(5px); }
+}
+
+.upload-queue {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.upload-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--surface-alt);
+  border-radius: var(--radius);
+  padding: 7px 9px;
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 /* ------------------------------------------------------------------ main */
@@ -198,6 +365,20 @@ button:disabled {
   border-bottom: 1px solid var(--border);
 }
 
+.app-header h1 {
+  margin: 0;
+  font-size: 18px;
+  background: linear-gradient(92deg, var(--accent), var(--accent-2) 55%, var(--accent-3));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.subtitle {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .account {
   margin-left: auto;
   display: flex;
@@ -207,16 +388,6 @@ button:disabled {
 
 .account-email {
   font-size: 13px;
-  color: var(--muted);
-}
-
-.app-header h1 {
-  margin: 0;
-  font-size: 18px;
-}
-
-.subtitle {
-  font-size: 12px;
   color: var(--muted);
 }
 
@@ -246,13 +417,17 @@ button:disabled {
 .bubble {
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px 14px;
-  max-width: 780px;
+  padding: 13px 15px;
+  max-width: 800px;
 }
 
 .bubble-user {
   align-self: flex-end;
-  background: var(--surface-alt);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent) 14%, var(--surface-alt)),
+    var(--surface-alt)
+  );
 }
 
 .bubble-assistant {
@@ -261,7 +436,7 @@ button:disabled {
 
 .bubble-role {
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--muted);
   margin-bottom: 6px;
@@ -271,10 +446,83 @@ button:disabled {
   white-space: pre-wrap;
 }
 
+/* -------------------------------------------------- inline citation chips */
 .inline-marker {
-  color: var(--accent);
-  font-weight: 600;
-  padding-left: 2px;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  margin: 0 2px;
+  padding: 0 5px;
+  vertical-align: 1px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--doc);
+  background: var(--doc-soft);
+  border: 1px solid var(--doc-line);
+  border-radius: 6px;
+}
+
+.inline-marker:hover:not(:disabled) {
+  background: var(--doc);
+  border-color: var(--doc);
+  color: #0d0f14;
+}
+
+.inline-marker.orphan {
+  color: var(--muted);
+  background: none;
+  border-style: dashed;
+  border-color: var(--border);
+  text-decoration: line-through;
+  cursor: help;
+}
+
+.marker-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  z-index: 20;
+  width: 280px;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  white-space: normal;
+  color: var(--muted);
+  background: var(--surface-hi);
+  border: 1px solid var(--doc-line);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.inline-marker:hover .marker-tooltip,
+.inline-marker:focus-visible .marker-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
+}
+
+.marker-tooltip strong {
+  display: block;
+  color: var(--doc);
+  margin-bottom: 1px;
+}
+
+.marker-tooltip em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+  margin-bottom: 6px;
 }
 
 .thinking {
@@ -290,40 +538,103 @@ button:disabled {
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
 }
 
 .citation {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--doc-line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.citation:hover {
+  border-left-color: var(--doc);
+}
+
+.citation.flash {
+  border-color: var(--doc);
+  border-left-color: var(--doc);
+  animation: flash 1.6s ease-out;
+}
+
+@keyframes flash {
+  0%   { background: var(--doc-soft); }
+  70%  { background: var(--doc-soft); }
+  100% { background: transparent; }
+}
+
+.citation-head {
   display: flex;
-  gap: 8px;
-  font-size: 13px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 11px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 0;
+}
+
+.citation-head:hover {
+  background: var(--surface-alt);
+  border: none;
 }
 
 .citation-marker {
-  color: var(--accent);
-  font-weight: 600;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #0d0f14;
+  background: var(--doc);
+  border-radius: 6px;
 }
 
 .citation-body {
+  flex: 1;
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
 .citation-title {
+  font-size: 13px;
   font-weight: 600;
 }
 
 .citation-section {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.citation-chevron {
+  flex: none;
+  color: var(--muted);
+  font-size: 17px;
+  transition: transform 0.18s ease;
+}
+
+.citation-chevron.open {
+  transform: rotate(90deg);
+  color: var(--doc);
 }
 
 .citation-snippet {
-  margin: 4px 0 0;
+  margin: 0;
+  padding: 0 12px 12px 42px;
+  font-size: 12.5px;
   color: var(--muted);
-  max-height: 3.2em;
-  overflow: hidden;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
 }
 
 /* -------------------------------------------------------------- composer */
@@ -340,13 +651,15 @@ button:disabled {
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 10px 12px;
+  padding: 11px 13px;
   font: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .composer textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 /* ------------------------------------------------------------------- auth */
@@ -362,6 +675,9 @@ button:disabled {
   place-items: center;
   height: 100vh;
   padding: 24px;
+  background:
+    radial-gradient(60ch 40ch at 22% 12%, color-mix(in srgb, var(--accent-2) 13%, transparent), transparent),
+    radial-gradient(50ch 40ch at 82% 84%, color-mix(in srgb, var(--accent-3) 11%, transparent), transparent);
 }
 
 .auth-card {
@@ -372,13 +688,18 @@ button:disabled {
   gap: 14px;
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 28px;
+  border-radius: 16px;
+  padding: 30px;
+  box-shadow: 0 18px 50px rgb(0 0 0 / 0.4);
 }
 
 .auth-card h1 {
   margin: 0;
-  font-size: 20px;
+  font-size: 21px;
+  background: linear-gradient(92deg, var(--accent), var(--accent-2) 55%, var(--accent-3));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .auth-card .subtitle {
@@ -400,11 +721,13 @@ button:disabled {
   border-radius: var(--radius);
   padding: 10px 12px;
   font: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .auth-card input:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 .hint {
@@ -422,5 +745,17 @@ button:disabled {
 }
 
 .link-button:hover {
+  background: none;
+  border: none;
   text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
