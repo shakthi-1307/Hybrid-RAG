@@ -56,7 +56,13 @@ question
           fusion.py — RRF:  score(d) = Σ  w_s / (k + rank_s(d))
                  │
                  ▼
-      hybrid_retriever — take TOP_K, hydrate from Postgres
+      hydrate SHORTLIST_CANDIDATE_COUNT from Postgres
+                 │
+                 ▼
+      reranker.py — cross-encoder rescores the shortlist
+                 │
+                 ▼
+      diversity.py — take TOP_K, max MAX_CHUNKS_PER_DOCUMENT per source
                  │
                  ▼
    LangGraph:  retrieve ─┬─(hits)──► generate ──► cite ──► END
@@ -77,7 +83,7 @@ see below.
 ### Document diversity
 
 Pure relevance ranking answers "which chunks best match this query". For a
-comparison — *"how does my resume line up against this job description"* — that
+comparison — _"how does my resume line up against this job description"_ — that
 is the wrong objective. The best six chunks may all come from the longer
 document, and the question then becomes structurally unanswerable no matter how
 good the ranking is.
@@ -123,16 +129,16 @@ Results are written to `/data/evaluation/results/` as JSON and Markdown.
 
 **What is measured**
 
-| Configuration | What it isolates |
-|---|---|
-| BM25 only | Lexical baseline |
-| Dense only | What a typical RAG implementation ships |
-| Hybrid RRF | Value of fusing the two |
-| Hybrid + cross-encoder | Value of reranking the shortlist |
+| Configuration          | What it isolates                        |
+| ---------------------- | --------------------------------------- |
+| BM25 only              | Lexical baseline                        |
+| Dense only             | What a typical RAG implementation ships |
+| Hybrid RRF             | Value of fusing the two                 |
+| Hybrid + cross-encoder | Value of reranking the shortlist        |
 
 Per configuration: Hit@k, MRR, nDCG@k, and p50/p95 latency broken out by stage
 (vector, BM25, fusion, hydrate, rerank). Hit rate alone cannot tell rank 1 from
-rank 6 — nDCG is what shows whether reranking improved the *ordering* rather
+rank 6 — nDCG is what shows whether reranking improved the _ordering_ rather
 than just membership. Latency excludes answer generation, which is bounded by
 the LLM provider rather than by retrieval.
 
@@ -160,11 +166,11 @@ RAGAS score hides.
 
 **Two things the harness does deliberately**
 
-*Reports a confidence interval.* At n=30, a hit rate of 90% carries a 95%
+_Reports a confidence interval._ At n=30, a hit rate of 90% carries a 95%
 Wilson interval of roughly 74–97%. Quoting the bare number invites a question
 you cannot answer; quoting the interval answers it first.
 
-*Refuses to grade its own homework.* Questions generated from a passage tend to
+_Refuses to grade its own homework._ Questions generated from a passage tend to
 quote it, and a quoted question retrieves its source trivially — every
 configuration then scores near 100% and the benchmark measures nothing. The
 drafting prompt forbids reusing distinctive wording, and the review step exists
@@ -240,12 +246,12 @@ your platform's secret store.
 
 ### Where secrets live
 
-| Secret | Source of truth | Committed default |
-|---|---|---|
-| `JWT_SECRET_KEY` | `.env` | **none — required**; import fails without it |
-| `GROQ_API_KEY` | `.env` | empty; warns at startup |
-| `POSTGRES_PASSWORD` | `.env` | empty; **compose refuses to start** without it |
-| `DATABASE_URL` | optional override for managed platforms | unset; assembled from `POSTGRES_*` |
+| Secret              | Source of truth                         | Committed default                              |
+| ------------------- | --------------------------------------- | ---------------------------------------------- |
+| `JWT_SECRET_KEY`    | `.env`                                  | **none — required**; import fails without it   |
+| `GROQ_API_KEY`      | `.env`                                  | empty; warns at startup                        |
+| `POSTGRES_PASSWORD` | `.env`                                  | empty; **compose refuses to start** without it |
+| `DATABASE_URL`      | optional override for managed platforms | unset; assembled from `POSTGRES_*`             |
 
 The connection URL is built in `app/db/url.py` with SQLAlchemy's
 `URL.create`, which escapes each component. It is never string-formatted, so a
@@ -291,14 +297,16 @@ hybrid-rag/
       │  └─ loaders/  base · pdf_loader · markdown_loader · registry
       ├─ stores/      vector_store · document_repository · chat_repository · user_repository
       ├─ retrieval/   vector_search · bm25_search · fusion · reranker
-      │               hybrid_retriever · index_builder
+      │               diversity · hydration · hybrid_retriever · index_builder
       ├─ generation/  prompt · llm · citations
       ├─ graph/       state · nodes · pipeline
       └─ api/         deps.py + routes/{auth,documents,chat,health}.py
 └─ frontend/
    └─ src/
       ├─ config.js                 every frontend constant
+      ├─ styles.css                dark base · per-document hues
       ├─ api/client.js             the only module that calls fetch
+      ├─ lib/documentColor.js      stable hue per document id
       ├─ hooks/       useAuth · useChat · useDocuments
       └─ components/  LoginPage · Workspace · SessionSidebar · ChatWindow
                       MessageBubble · CitationList · Composer · DocumentPanel
@@ -387,10 +395,6 @@ vulture app --min-confidence 80    # dead-code sweep
 The test suite is deliberately offline: the chunker tests inject a
 word-counting `TokenCounter` so packing behaviour is asserted without
 downloading a tokenizer.
-
----
-
-## API
 
 ---
 
