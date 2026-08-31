@@ -31,10 +31,13 @@ COPY alembic.ini .
 COPY alembic ./alembic
 COPY app ./app
 # The benchmark harness ships with the image so it can be run against the
-# live database and vector store: docker compose exec api python -m evaluation
+# live database: docker compose exec api python -m evaluation
 COPY evaluation ./evaluation
-COPY entrypoint.sh .
-RUN chmod +x entrypoint.sh
+COPY entrypoint.sh entrypoint-worker.sh ./
+RUN chmod +x entrypoint.sh entrypoint-worker.sh
 
 EXPOSE 8000
+# The same image serves the API and the worker; compose overrides the command
+# for the worker service. One image means one build and no chance of the two
+# running different versions of the ingestion code.
 CMD ["./entrypoint.sh"]

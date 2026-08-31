@@ -7,24 +7,23 @@ import logging
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, BackgroundTasks, Depends, UploadFile, status
+from fastapi import APIRouter, Depends, UploadFile, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, get_db
 from app.config import settings
-from app.db.models import User
-from app.db.session import SessionFactory
+from app.db.models import IngestionStatus, User
 from app.errors import (
     DocumentTooLargeError,
     QuotaExceededError,
     ResourceNotFoundError,
+    UnsupportedFormatError,
 )
 from app.ingestion.loaders.registry import get_loader
-from app.ingestion.pipeline import ingest_document
-from app.retrieval.index_builder import refresh_bm25_index
+from app.jobs import queue
 from app.schemas.document import DocumentOut
 from app.stores import document_repository
-from app.stores.vector_store import vector_store
 
 logger = logging.getLogger(__name__)
 
@@ -85,19 +84,40 @@ def _enforce_quota(db: Session, owner_id: UUID, incoming_bytes: int) -> None:
         )
 
 
-def _run_ingestion(owner_id: UUID, document_id: UUID, file_path: Path) -> None:
-    """Background entry point: owns its own database session."""
-    with SessionFactory() as session:
-        ingest_document(session, owner_id, document_id, file_path)
+def _stored_path(checksum: str, filename: str) -> Path:
+    """Where an uploaded file lives on disk. One definition, three callers."""
+    return settings.UPLOAD_DIR / f"{checksum}{Path(filename).suffix.lower()}"
+
+
+def _queue_ingestion(db: Session, owner_id: UUID, document_id: UUID, path: Path) -> None:
+    """Hand the document to the worker.
+
+    A duplicate live job violates the partial unique index. That is not an
+    error worth surfacing: it means the work is already scheduled, which is
+    exactly what the caller wanted.
+    """
+    try:
+        queue.enqueue(db, document_id=document_id, owner_id=owner_id, file_path=path)
+    except IntegrityError:
+        db.rollback()
+        logger.info(
+            "Ingestion already queued for document %s",
+            document_id,
+            extra={"document_id": str(document_id)},
+        )
 
 
 @router.post("", response_model=DocumentOut, status_code=status.HTTP_202_ACCEPTED)
 def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> DocumentOut:
+    # A multipart part can legally arrive with no filename. Path(None) raises
+    # TypeError, which would surface as a 500 for what is a bad request.
+    if not file.filename:
+        raise UnsupportedFormatError("The upload is missing a filename.")
+
     get_loader(file.filename)  # rejects unsupported formats before touching disk
 
     # Cheap pre-check so an over-quota account is rejected before we spend the
@@ -105,10 +125,35 @@ def upload_document(
     _enforce_quota(db, user.id, incoming_bytes=0)
 
     file_path, byte_size, checksum = _store_upload(file)
+    logger.info(
+        "Received upload %s (%d bytes)",
+        file.filename,
+        byte_size,
+        extra={"document_filename": file.filename, "byte_size": byte_size},
+    )
 
     existing = document_repository.find_by_checksum(db, user.id, checksum)
     if existing is not None:
-        logger.info("Upload %s already ingested as %s", file.filename, existing.id)
+        # Same bytes, same owner. If the previous attempt died, re-uploading
+        # is the obvious way a user retries — so requeue rather than handing
+        # back the failed record and leaving them no way forward.
+        if existing.status == IngestionStatus.FAILED:
+            logger.info(
+                "Re-queueing previously failed document %s",
+                existing.id,
+                extra={"document_id": str(existing.id)},
+            )
+            document_repository.set_status(
+                db, existing, status=IngestionStatus.PENDING, error=None
+            )
+            _queue_ingestion(db, user.id, existing.id, file_path)
+        else:
+            logger.info(
+                "Upload %s already ingested as %s",
+                file.filename,
+                existing.id,
+                extra={"document_id": str(existing.id)},
+            )
         return DocumentOut.model_validate(existing)
 
     try:
@@ -126,7 +171,11 @@ def upload_document(
         byte_size=byte_size,
         checksum=checksum,
     )
-    background_tasks.add_task(_run_ingestion, user.id, document.id, file_path)
+    # Queued, not executed. The API process returns as soon as the row is
+    # durable; a separate worker does the embedding. That is what makes an API
+    # restart mid-ingest survivable — the job outlives the process that
+    # created it.
+    _queue_ingestion(db, user.id, document.id, file_path)
     return DocumentOut.model_validate(document)
 
 
@@ -154,14 +203,13 @@ def delete_document(
     if document is None:
         raise ResourceNotFoundError(f"Document {document_id} does not exist.")
 
-    vector_store.delete_document(str(document.id))
-
     # Read these before the delete: the instance is detached afterwards.
     checksum = document.checksum
-    stored_file = (
-        settings.UPLOAD_DIR / f"{checksum}{Path(document.filename).suffix.lower()}"
-    )
+    stored_file = _stored_path(checksum, document.filename)
 
+    # Chunks, embeddings, the lexical index entry, and any queued job all go
+    # with the row — the first three by ON DELETE CASCADE, in one transaction.
+    # There is no second store to clean up and no index to rebuild, which is
+    # the whole return on consolidating into Postgres.
     document_repository.delete_document(db, document)
     _discard_upload(stored_file, checksum, db)
-    refresh_bm25_index(db)

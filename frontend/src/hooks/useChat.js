@@ -61,6 +61,7 @@ export function useChat() {
     async (question) => {
       if (!activeId) return;
 
+      const streamingId = `streaming-${Date.now()}`;
       setPending(true);
       setMessages((current) => [
         ...current,
@@ -71,14 +72,72 @@ export function useChat() {
           citations: [],
           created_at: new Date().toISOString(),
         },
+        {
+          // The assistant turn is inserted empty and filled as tokens arrive.
+          // `streaming: true` tells the bubble to render the text plainly:
+          // citation markers are not resolved until the answer is complete,
+          // and rendering an unresolved [1] as a broken link mid-stream would
+          // flicker every marker from broken to valid as the reply lands.
+          id: streamingId,
+          role: 'assistant',
+          content: '',
+          citations: [],
+          streaming: true,
+          created_at: new Date().toISOString(),
+        },
       ]);
 
+      const appendToken = (text) =>
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === streamingId
+              ? { ...message, content: message.content + text }
+              : message,
+          ),
+        );
+
       try {
-        await api.sendQuery(activeId, question);
-        setMessages(await api.listMessages(activeId));
+        let failed = null;
+
+        await api.streamQuery(activeId, question, ({ event, data }) => {
+          if (event === 'token') {
+            appendToken(data.text);
+          } else if (event === 'done') {
+            // Citations arrive validated, once. Swapping them in here is what
+            // turns the plain text into a cited answer.
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === streamingId
+                  ? {
+                      ...message,
+                      id: data.message_id,
+                      citations: data.citations ?? [],
+                      streaming: false,
+                    }
+                  : message,
+              ),
+            );
+          } else if (event === 'error') {
+            failed = data.detail;
+          }
+        });
+
+        if (failed) {
+          // Drop the partial answer rather than leaving half a reply on
+          // screen presented as if it were finished.
+          setMessages((current) =>
+            current.filter((message) => message.id !== streamingId),
+          );
+          setError(failed);
+        } else {
+          setError(null);
+        }
+
         await loadSessions();
-        setError(null);
       } catch (err) {
+        setMessages((current) =>
+          current.filter((message) => message.id !== streamingId),
+        );
         setError(err.message);
       } finally {
         setPending(false);

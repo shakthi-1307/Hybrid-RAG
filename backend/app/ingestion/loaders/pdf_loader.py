@@ -74,9 +74,7 @@ class PdfLoader(DocumentLoader):
             weighted[round(line.size, 1)] += len(line.text)
         return weighted.most_common(1)[0][0]
 
-    def _heading_levels(
-        self, lines: list[_Line], body_size: float
-    ) -> dict[float, int]:
+    def _heading_levels(self, lines: list[_Line], body_size: float) -> dict[float, int]:
         threshold = body_size * settings.PDF_HEADING_SIZE_RATIO
         candidates = sorted(
             {round(line.size, 1) for line in lines if line.size >= threshold},

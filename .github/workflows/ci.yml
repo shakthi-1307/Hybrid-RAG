@@ -1,0 +1,236 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Lets a failing build be re-run without an empty commit.
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run's result irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Required with no default in app/config.py, so importing anything under
+  # app/ fails without it. Throwaway value; the startup check only enforces
+  # a length floor.
+  JWT_SECRET_KEY: ci-secret-not-used-for-anything-real-0123456789
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      # Only ruff, not the full requirements file. Linting does not need
+      # torch, and pulling it would add minutes to the fastest feedback in
+      # the pipeline.
+      - run: pip install ruff==0.8.4
+
+      - name: ruff check
+        run: ruff check .
+        working-directory: backend
+
+      - name: ruff format --check
+        run: ruff format --check .
+        working-directory: backend
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Must match docker-compose.yml. Testing against stock postgres would
+        # skip every pgvector behaviour the retrieval layer depends on.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+          POSTGRES_DB: rag_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag -d rag_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Presence of this variable is what un-skips the integration tests. Left
+      # unset locally they skip, so `pytest` still works with nothing running.
+      TEST_DATABASE_URL: postgresql+psycopg://rag:rag@localhost:5432/rag_test
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+      POSTGRES_DB: rag_test
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          # CPU-only torch. The default wheel bundles CUDA (~2.5 GB), which
+          # exhausts the runner's disk and is never used — tests stub the
+          # models rather than running them.
+          pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+          pip install -r requirements-dev.txt
+
+      - name: Create a separate database for the migration check
+        # The test suite builds its schema with create_all, so migrations get
+        # their own database. Sharing one would have the two fighting over the
+        # same tables and enum types, and a failure would not say which side
+        # was wrong.
+        env:
+          PGPASSWORD: rag
+        run: psql -h localhost -U rag -d rag_test -c "CREATE DATABASE rag_migrations"
+
+      - name: Run migrations from empty
+        working-directory: backend
+        env:
+          POSTGRES_DB: rag_migrations
+        # The real deployment path: entrypoint.sh runs exactly this. A
+        # migration that only works against an already-populated database
+        # fails here rather than on someone's first `docker compose up`.
+        run: alembic upgrade head
+
+      - name: Verify the migrated schema
+        env:
+          PGPASSWORD: rag
+        # Asserts the objects retrieval depends on actually exist. `alembic
+        # check` would be the obvious tool, but its autogenerate comparison
+        # cannot render HNSW operator classes or generated columns and reports
+        # a permanent false difference — a check that always fails teaches
+        # people to ignore it.
+        run: |
+          set -euo pipefail
+          expect() {
+            local description="$1" query="$2"
+            local found
+            found=$(psql -h localhost -U rag -d rag_migrations -tAc "$query")
+            if [ "$found" != "1" ]; then
+              echo "::error::Missing after migration: $description"
+              exit 1
+            fi
+            echo "ok: $description"
+          }
+
+          expect "pgvector extension" \
+            "SELECT count(*) FROM pg_extension WHERE extname = 'vector'"
+          expect "document_chunks.embedding is a vector column" \
+            "SELECT count(*) FROM information_schema.columns
+             WHERE table_name = 'document_chunks'
+               AND column_name = 'embedding' AND udt_name = 'vector'"
+          expect "document_chunks.search_vector is generated" \
+            "SELECT count(*) FROM information_schema.columns
+             WHERE table_name = 'document_chunks'
+               AND column_name = 'search_vector' AND is_generated = 'ALWAYS'"
+          expect "HNSW index on embedding" \
+            "SELECT count(*) FROM pg_indexes
+             WHERE tablename = 'document_chunks'
+               AND indexdef ILIKE '%USING hnsw%'"
+          expect "GIN index on search_vector" \
+            "SELECT count(*) FROM pg_indexes
+             WHERE tablename = 'document_chunks'
+               AND indexdef ILIKE '%USING gin%'"
+          expect "partial unique index for live jobs" \
+            "SELECT count(*) FROM pg_indexes
+             WHERE indexname = 'uq_ingestion_jobs_active_document'"
+
+      - name: Migrations are reversible
+        working-directory: backend
+        env:
+          POSTGRES_DB: rag_migrations
+        # A downgrade path that was never executed is a downgrade path that
+        # does not work. Back down one revision and up again.
+        run: |
+          alembic downgrade -1
+          alembic upgrade head
+
+      - name: Run tests
+        working-directory: backend
+        run: pytest -q
+
+      - name: Confirm integration tests actually ran
+        working-directory: backend
+        # The integration tests skip themselves when TEST_DATABASE_URL is
+        # absent. Without this step a broken database service would show as a
+        # green build with the most important tests quietly skipped.
+        run: |
+          pytest tests/test_retrieval_integration.py \
+                 tests/test_job_queue_integration.py \
+                 -q --no-header -rN | tee result.txt
+          if grep -q "skipped" result.txt; then
+            echo "::error::Integration tests were skipped; the database service is not reachable."
+            exit 1
+          fi
+
+  build:
+    name: Docker build
+    runs-on: ubuntu-latest
+    # No point building images from a tree that does not lint or pass tests.
+    needs: [lint, test]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          # Skip the RAGAS/LangChain stack: it is only used by the generation
+          # benchmark and adds roughly 500 MB to a build that exists to prove
+          # the Dockerfile is valid.
+          build-args: INSTALL_EVAL=false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          build-args: VITE_API_BASE_URL=/api/v1
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        # `npm ci` rather than `npm install`: it installs exactly the lockfile
+        # and fails if package.json has drifted from it, which is the point of
+        # having a lockfile at all.
+        run: npm ci
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build

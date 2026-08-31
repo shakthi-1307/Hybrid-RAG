@@ -28,9 +28,7 @@ def matches_expected(expected: str, retrieved_section: str) -> bool:
     return normalise(expected) in normalise(retrieved_section)
 
 
-def first_relevant_rank(
-    expected: str, retrieved_sections: list[str]
-) -> int | None:
+def first_relevant_rank(expected: str, retrieved_sections: list[str]) -> int | None:
     """1-based rank of the first matching section, or None if absent."""
     for position, section in enumerate(retrieved_sections, start=1):
         if matches_expected(expected, section):
@@ -69,9 +67,7 @@ def wilson_interval(successes: int, total: int) -> tuple[float, float]:
     centre = (proportion + z_squared / (2 * total)) / denominator
     margin = (
         WILSON_Z
-        * math.sqrt(
-            proportion * (1 - proportion) / total + z_squared / (4 * total**2)
-        )
+        * math.sqrt(proportion * (1 - proportion) / total + z_squared / (4 * total**2))
     ) / denominator
     return max(0.0, centre - margin), min(1.0, centre + margin)
 

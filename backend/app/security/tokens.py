@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import jwt
@@ -12,7 +12,7 @@ from app.errors import AuthenticationError
 
 
 def create_access_token(user_id: UUID) -> str:
-    issued_at = datetime.now(timezone.utc)
+    issued_at = datetime.now(UTC)
     payload = {
         "sub": str(user_id),
         "iat": issued_at,

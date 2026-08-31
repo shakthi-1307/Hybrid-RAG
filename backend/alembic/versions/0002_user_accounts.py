@@ -1,13 +1,15 @@
 """user accounts and per-user ownership of documents and chats
 
 Pre-auth rows have no owner and cannot be attributed to one, so they are
-removed. Chroma is a separate store and is not touched by migrations — wipe
+removed. (At this revision vectors lived in a separate store; revision 0003
+moves them into Postgres. On a fresh install both run in order.) Wipe
 the ``rag-data`` volume alongside this upgrade if it already holds vectors.
 
 Revision ID: 0002
 Revises: 0001
 Create Date: 2026-08-04
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa

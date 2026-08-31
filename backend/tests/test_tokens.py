@@ -15,12 +15,28 @@ def test_token_round_trips_the_user_id():
     assert decode_access_token(create_access_token(user_id)) == user_id
 
 
-def test_tampered_token_is_rejected():
-    token = create_access_token(uuid4())
-    tampered = token[:-1] + ("a" if token[-1] != "a" else "b")
+def test_tampered_payload_is_rejected():
+    """Flip a character in the payload, not the signature.
+
+    Altering the *last* character of the token looks like the obvious tamper,
+    but base64url's final character only encodes leftover bits, so several
+    substitutions decode to the same signature bytes and the token stays
+    valid — a test that passes or fails depending on the random user id.
+    Changing the payload always changes what was signed.
+    """
+    header, payload, signature = create_access_token(uuid4()).split(".")
+    tampered_payload = ("a" if payload[0] != "a" else "b") + payload[1:]
 
     with pytest.raises(AuthenticationError):
-        decode_access_token(tampered)
+        decode_access_token(f"{header}.{tampered_payload}.{signature}")
+
+
+def test_tampered_signature_is_rejected():
+    header, payload, signature = create_access_token(uuid4()).split(".")
+    tampered_signature = ("a" if signature[0] != "a" else "b") + signature[1:]
+
+    with pytest.raises(AuthenticationError):
+        decode_access_token(f"{header}.{payload}.{tampered_signature}")
 
 
 def test_token_signed_with_another_secret_is_rejected(monkeypatch):

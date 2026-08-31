@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from app.config import settings
@@ -50,10 +50,10 @@ def test_metadata_is_flat_and_carries_the_schema_version():
         source_filename="handbook.pdf",
         content_type="application/pdf",
         chunk=chunk,
-        ingested_at=datetime.now(timezone.utc),
+        ingested_at=datetime.now(UTC),
     )
 
-    assert all(isinstance(v, (str, int, float, bool)) for v in metadata.values())
+    assert all(isinstance(v, str | int | float | bool) for v in metadata.values())
     assert metadata["schema_version"] == settings.METADATA_SCHEMA_VERSION
     assert metadata["section"] == "Limits"
     assert metadata["page_start"] == 11
@@ -70,7 +70,7 @@ def test_metadata_carries_the_owner_retrieval_filters_on():
         source_filename="notes.md",
         content_type="text/markdown",
         chunk=chunk,
-        ingested_at=datetime.now(timezone.utc),
+        ingested_at=datetime.now(UTC),
     )
 
     assert metadata[OWNER_METADATA_KEY] == str(owner_id)
@@ -86,7 +86,7 @@ def test_absent_page_numbers_are_omitted_rather_than_null():
         source_filename="notes.md",
         content_type="text/markdown",
         chunk=chunk,
-        ingested_at=datetime.now(timezone.utc),
+        ingested_at=datetime.now(UTC),
     )
 
     assert "page_start" not in metadata

@@ -69,25 +69,23 @@ rag-chatbot/
 │   │   │   │   └── registry.py           extension → loader; the only format list
 │   │   │   ├── tokenizer.py      counts with the embedding model's own tokenizer
 │   │   │   ├── chunker.py        512/64 packing, never crosses a section
-│   │   │   ├── metadata.py       flat versioned Chroma schema + heading codec
+│   │   │   ├── metadata.py       flat versioned chunk schema + heading codec
 │   │   │   ├── embedder.py       BGE passage/query asymmetry, dimension guard
 │   │   │   └── pipeline.py       wiring and failure handling; no algorithms
 │   │   │
 │   │   ├── stores/
-│   │   │   ├── vector_store.py           ChromaDB
 │   │   │   ├── document_repository.py    owner-scoped; quotas
 │   │   │   ├── chat_repository.py        owner-scoped history
 │   │   │   └── user_repository.py
 │   │   │
 │   │   ├── retrieval/                          ← PHASE 2
 │   │   │   ├── vector_search.py    dense, filtered pre-ANN-cut
-│   │   │   ├── bm25_search.py      lexical, filtered pre-truncation
+│   │   │   ├── lexical_search.py   Postgres full-text, filtered pre-LIMIT
 │   │   │   ├── fusion.py           Reciprocal Rank Fusion
 │   │   │   ├── reranker.py         cross-encoder over the shortlist
 │   │   │   ├── diversity.py        caps one document's share of top-k
 │   │   │   ├── hydration.py        chunk row → DTO, in one place
 │   │   │   ├── hybrid_retriever.py coordination only
-│   │   │   └── index_builder.py    keeps BM25 in sync with Postgres
 │   │   │
 │   │   ├── generation/
 │   │   │   ├── prompt.py         numbered context block + system prompt
@@ -122,7 +120,12 @@ rag-chatbot/
 │       ├── test_markdown_loader.py       heading hierarchy, fenced code
 │       ├── test_metadata.py              flat schema, owner key, round-trip
 │       ├── test_fusion.py                RRF formula, weights, determinism
-│       ├── test_bm25_owner_scope.py      cross-tenant isolation
+│       ├── test_lexical_query.py         tsquery construction
+│       ├── test_retrieval_integration.py  cross-tenant isolation (needs a DB)
+│       ├── test_job_queue_integration.py  claim · retry · crash recovery
+│       ├── test_streaming.py             SSE framing + citation ordering
+│       ├── test_observability.py         request ids · stage timing
+│       ├── test_job_backoff.py           retry delay arithmetic
 │       ├── test_diversity.py             per-document cap, backfill, order
 │       ├── test_citations.py             marker extraction, hallucination drop
 │       ├── test_prompt.py                numbering, context block, history

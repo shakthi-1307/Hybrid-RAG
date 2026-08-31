@@ -25,9 +25,7 @@ def extract_citation_markers(answer: str) -> list[int]:
     return seen
 
 
-def build_citations(
-    markers: list[int], chunks: list[RetrievedChunk]
-) -> list[Citation]:
+def build_citations(markers: list[int], chunks: list[RetrievedChunk]) -> list[Citation]:
     citations: list[Citation] = []
     for marker in markers:
         if not 1 <= marker <= len(chunks):

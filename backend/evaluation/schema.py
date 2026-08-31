@@ -31,7 +31,7 @@ class GoldSet(BaseModel):
 
 class StageTimings(BaseModel):
     vector_ms: float = 0.0
-    bm25_ms: float = 0.0
+    lexical_ms: float = 0.0
     fusion_ms: float = 0.0
     hydrate_ms: float = 0.0
     rerank_ms: float = 0.0
@@ -39,7 +39,7 @@ class StageTimings(BaseModel):
     def total_ms(self) -> float:
         return (
             self.vector_ms
-            + self.bm25_ms
+            + self.lexical_ms
             + self.fusion_ms
             + self.hydrate_ms
             + self.rerank_ms

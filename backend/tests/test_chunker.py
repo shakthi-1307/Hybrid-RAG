@@ -66,8 +66,7 @@ def test_undersized_tail_is_merged_into_previous_chunk(counter):
 
 def test_chunk_indices_are_contiguous_across_sections(counter):
     sections = [
-        Section(order=i, heading_path=[f"S{i}"], text="one two three.")
-        for i in range(3)
+        Section(order=i, heading_path=[f"S{i}"], text="one two three.") for i in range(3)
     ]
 
     chunks = make_chunker(counter).chunk(sections)

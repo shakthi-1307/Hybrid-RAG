@@ -6,7 +6,7 @@ indistinguishable from one that does not exist.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
@@ -27,9 +27,7 @@ def create_session(session: Session, owner_id: UUID, title: str) -> ChatSession:
     return chat_session
 
 
-def get_session(
-    session: Session, owner_id: UUID, session_id: UUID
-) -> ChatSession | None:
+def get_session(session: Session, owner_id: UUID, session_id: UUID) -> ChatSession | None:
     return session.scalar(
         select(ChatSession).where(
             ChatSession.id == session_id, ChatSession.owner_id == owner_id
@@ -95,7 +93,7 @@ def add_message(
         citations=[citation.model_dump(mode="json") for citation in citations],
     )
     session.add(message)
-    chat_session.updated_at = datetime.now(timezone.utc)
+    chat_session.updated_at = datetime.now(UTC)
     session.commit()
     session.refresh(message)
     return message

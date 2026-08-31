@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.retrieval.index_builder import refresh_bm25_index
 from evaluation.config import LATENCY_WARMUP_QUERIES, P50, P95
 from evaluation.configurations import CONFIGURATIONS, ConfigurationRunner
 from evaluation.corpus import sections_for_chunk_ids
@@ -30,7 +29,7 @@ from evaluation.schema import (
 
 logger = logging.getLogger(__name__)
 
-STAGE_NAMES = ("vector_ms", "bm25_ms", "fusion_ms", "hydrate_ms", "rerank_ms")
+STAGE_NAMES = ("vector_ms", "lexical_ms", "fusion_ms", "hydrate_ms", "rerank_ms")
 
 
 def _warm_up(
@@ -110,21 +109,19 @@ def run_evaluation(
     if not goldset.questions:
         raise RuntimeError("The gold set is empty; nothing to evaluate.")
 
-    # The BM25 index lives in process memory and is normally built by the API's
-    # startup lifespan. This CLI is a different process, so without an explicit
-    # build every lexical and hybrid configuration would silently score zero.
-    refresh_bm25_index(session)
+    # No index build step. Both indexes live in Postgres and are maintained as
+    # rows are written, so this CLI sees exactly what the API sees — which was
+    # not true when the lexical index was per-process memory and this harness
+    # had to rebuild it before every run to avoid scoring zero.
 
     return EvaluationReport(
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
         top_k=settings.TOP_K,
         question_count=len(goldset.questions),
         embedding_model=settings.EMBEDDING_MODEL_NAME,
         reranker_model=settings.RERANKER_MODEL_NAME,
         configurations=[
-            _evaluate_configuration(
-                session, name, description, runner, goldset, owner_id
-            )
+            _evaluate_configuration(session, name, description, runner, goldset, owner_id)
             for name, description, runner in CONFIGURATIONS
         ],
     )

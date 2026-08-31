@@ -4,7 +4,10 @@ RRF combines ranked lists without needing their scores to be comparable:
 
     score(d) = sum over sources of  weight_s / (k + rank_s(d))
 
-That property is what makes it safe to merge cosine similarity with BM25.
+That property is what makes it safe to merge cosine similarity with a
+full-text rank — two numbers on unrelated scales, whose distributions also
+shift from corpus to corpus. Only the positions are used, so neither scale has
+to be calibrated against the other.
 """
 
 from __future__ import annotations
@@ -12,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 VECTOR_SOURCE = "vector"
-BM25_SOURCE = "bm25"
+LEXICAL_SOURCE = "lexical"
 
 
 @dataclass(frozen=True)

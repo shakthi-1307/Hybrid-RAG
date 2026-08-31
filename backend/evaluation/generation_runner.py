@@ -9,12 +9,11 @@ invented a source number, that disagreement is the interesting result.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.retrieval.index_builder import refresh_bm25_index
 from evaluation.answers import RETRIEVAL_CONFIGURATION, generate_answers
 from evaluation.citation_metrics import summarise
 from evaluation.config import RAGAS_JUDGE_MODEL
@@ -30,16 +29,12 @@ def run_generation_evaluation(
     if not goldset.questions:
         raise RuntimeError("The gold set is empty; nothing to evaluate.")
 
-    # This CLI is a separate process from the API, so the in-memory lexical
-    # index has to be built here or hybrid retrieval silently returns nothing.
-    refresh_bm25_index(session)
-
     records = generate_answers(session, goldset, owner_id)
     if not records:
         raise RuntimeError("No answers were produced; check the Groq API key.")
 
     return GenerationReport(
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
         question_count=len(records),
         retrieval_configuration=RETRIEVAL_CONFIGURATION,
         judge_model=RAGAS_JUDGE_MODEL,

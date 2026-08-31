@@ -49,9 +49,7 @@ def sections_for_chunk_ids(
         .join(Document)
         .where(DocumentChunk.id.in_(chunk_ids), Document.owner_id == owner_id)
     )
-    return {
-        row[0]: (row[1] or row[2]) for row in session.execute(statement).all()
-    }
+    return {row[0]: (row[1] or row[2]) for row in session.execute(statement).all()}
 
 
 def section_of(chunk: DocumentChunk, document_title: str) -> str:

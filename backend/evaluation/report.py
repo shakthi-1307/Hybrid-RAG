@@ -70,15 +70,19 @@ def render_markdown(report: EvaluationReport) -> str:
             f"| {_delta(result, baseline)} |"
         )
 
-    lines += ["", "### Mean latency by stage (ms)", "",
-              "| Configuration | vector | bm25 | fusion | hydrate | rerank |",
-              "| --- | --- | --- | --- | --- | --- |"]
+    lines += [
+        "",
+        "### Mean latency by stage (ms)",
+        "",
+        "| Configuration | vector | lexical | fusion | hydrate | rerank |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
     for result in report.configurations:
         stages = result.mean_stage_ms
         lines.append(
             f"| {result.description} "
             f"| {stages['vector_ms']:.1f} "
-            f"| {stages['bm25_ms']:.1f} "
+            f"| {stages['lexical_ms']:.1f} "
             f"| {stages['fusion_ms']:.1f} "
             f"| {stages['hydrate_ms']:.1f} "
             f"| {stages['rerank_ms']:.1f} |"
@@ -112,10 +116,13 @@ def render_generation_markdown(report: GenerationReport) -> str:
         "",
         "| Metric | Value |",
         "| --- | --- |",
-        f"| Answers carrying a citation | **{_percent(citation.answers_with_citations)}** |",
+        f"| Answers carrying a citation | "
+        f"**{_percent(citation.answers_with_citations)}** |",
         f"| Mean citations per answer | {citation.mean_citations_per_answer:.2f} |",
-        f"| Invalid markers caught and dropped | **{_percent(citation.hallucinated_marker_rate)}** "
-        f"({citation.hallucinated_marker_count} of {citation.emitted_marker_count}) |",
+        f"| Invalid markers caught and dropped | "
+        f"**{_percent(citation.hallucinated_marker_rate)}** "
+        f"({citation.hallucinated_marker_count} of "
+        f"{citation.emitted_marker_count}) |",
         "",
     ]
 

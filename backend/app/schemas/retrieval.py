@@ -6,9 +6,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-CorpusEntry = tuple[str, str, UUID]
-"""``(chunk_id, text, owner_id)`` — one row of the lexical index corpus."""
-
 
 class RetrievedChunk(BaseModel):
     """A chunk hydrated from Postgres, ready to be shown to the LLM."""
@@ -32,5 +29,5 @@ class ScoredChunk(BaseModel):
     chunk: RetrievedChunk
     fused_score: float
     vector_rank: int | None = None
-    bm25_rank: int | None = None
+    lexical_rank: int | None = None
     rerank_score: float | None = None

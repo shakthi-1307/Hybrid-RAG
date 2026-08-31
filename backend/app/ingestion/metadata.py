@@ -1,8 +1,14 @@
 """The chunk metadata schema.
 
-Chroma only accepts flat scalar metadata, so the heading hierarchy is
-serialised to a single delimited string. This module owns that encoding in
-both directions and is the only place that knows the metadata field names.
+The heading hierarchy is stored as a single delimited string rather than an
+array. That began as a constraint of the vector store, which only accepted
+flat scalar metadata; it is kept because the citation format, the full-text
+index, and the benchmark's section matching all want one comparable string,
+and a column that has to be joined back together at every read is worse than
+one that was never split.
+
+This module owns the encoding in both directions and is the only place that
+knows the metadata field names.
 """
 
 from __future__ import annotations

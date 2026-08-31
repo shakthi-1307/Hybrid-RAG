@@ -39,7 +39,5 @@ def hydrate_chunks(
     """
     rows = document_repository.get_chunks_by_ids(session, owner_id, chunk_ids)
     return [
-        to_retrieved_chunk(rows[chunk_id])
-        for chunk_id in chunk_ids
-        if chunk_id in rows
+        to_retrieved_chunk(rows[chunk_id]) for chunk_id in chunk_ids if chunk_id in rows
     ]

@@ -38,9 +38,7 @@ def generate_answers(
     records: list[AnswerRecord] = []
 
     for index, question in enumerate(goldset.questions, start=1):
-        output = run_hybrid_reranked(
-            session, question.question, owner_id, settings.TOP_K
-        )
+        output = run_hybrid_reranked(session, question.question, owner_id, settings.TOP_K)
         chunks = hydrate_chunks(session, owner_id, output.chunk_ids)
         if not chunks:
             logger.warning("No context retrieved for: %s", question.question)

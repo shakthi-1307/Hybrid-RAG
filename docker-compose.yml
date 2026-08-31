@@ -1,6 +1,9 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector, not the stock postgres image: the extension ships as
+    # server-side files, so `CREATE EXTENSION vector` fails on plain postgres
+    # no matter what the Python side has installed.
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-rag}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
@@ -13,12 +16,24 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    # Deliberately not published to the host. Only the api service needs it,
-    # and it reaches Postgres over the compose network. To inspect it locally:
+    restart: unless-stopped
+    # Deliberately not published to the host. Only the api and worker services
+    # need it, and they reach Postgres over the compose network. To inspect it:
     #   docker compose exec postgres psql -U rag -d rag
 
   api:
-    build: ./backend
+    build:
+      context: ./backend
+      args:
+        # RAGAS and its LangChain stack are only used by the generation
+        # benchmark and add well over a gigabyte to the image. Set to "true"
+        # if you want to run `python -m evaluation generation`.
+        INSTALL_EVAL: "false"
+    # Named explicitly so the worker below can reuse this exact image. Without
+    # a shared name, Compose builds the same Dockerfile twice and writes two
+    # ~5 GB images to disk — which is what exhausts Docker's virtual disk and
+    # surfaces as "failed to extract layer: input/output error".
+    image: hybrid-rag-backend
     env_file: .env
     environment:
       # POSTGRES_USER / _PASSWORD / _DB reach the container through env_file,
@@ -27,7 +42,6 @@ services:
       # escaping rather than string-formatted here.
       POSTGRES_HOST: postgres
       UPLOAD_DIR: /data/uploads
-      CHROMA_DIR: /data/chroma
     volumes:
       - rag-data:/data
     depends_on:
@@ -36,21 +50,62 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/v1/health || exit 1"]
+      # /health/live, not /health: liveness must not depend on Postgres, or a
+      # database blip restarts every API container and turns a recoverable
+      # incident into an outage.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/api/v1/health/live || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 120s
+      start_period: 60s
+    restart: unless-stopped
+
+  worker:
+    # Same image as the API, different command. `build` is repeated so the
+    # image can be built by targeting either service; because `image` matches,
+    # Compose builds it once and both services share the layers. One image
+    # also guarantees the API and the worker can never run different versions
+    # of the ingestion code.
+    build:
+      context: ./backend
+      args:
+        INSTALL_EVAL: "false"
+    image: hybrid-rag-backend
+    command: ["./entrypoint-worker.sh"]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      # The same volume as the API: the API writes the uploaded file, the
+      # worker reads it. Both must see the same filesystem.
+      - rag-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # Waits for the API's entrypoint to have run `alembic upgrade head`.
+      # The worker's own entrypoint polls for the schema as well, so this is
+      # about avoiding a noisy startup rather than correctness.
+      api:
+        condition: service_started
+    # Scale with: docker compose up -d --scale worker=3
+    # Safe by construction — SKIP LOCKED means each worker claims a different
+    # job, and no worker holds an index the others cannot see. Each replica
+    # loads its own copy of the embedding model, so budget ~1.5 GB of RAM per
+    # worker.
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       args:
         VITE_API_BASE_URL: /api/v1
+    image: hybrid-rag-frontend
     depends_on:
       - api
     ports:
       - "5173:80"
+    restart: unless-stopped
 
 volumes:
   postgres-data:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file="../.env",
@@ -32,11 +33,26 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
     ]
     LOG_LEVEL: str = "INFO"
-    LOG_FORMAT: str = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+    # "json" for anything that ships logs somewhere (one object per line, with
+    # request_id and user_id on every record). "console" for a human reading a
+    # terminal. The two carry identical fields; only the rendering differs.
+    LOG_RENDERER: str = "json"
+    LOG_CONSOLE_FORMAT: str = "%(asctime)s %(levelname)-8s %(name)s: %(message)s"
+    # Header a proxy may use to pass a request id inward. Absent or malformed,
+    # the middleware mints one. Echoed back on every response so a user can
+    # quote it in a bug report and land on the exact request.
+    REQUEST_ID_HEADER: str = "X-Request-ID"
+    REQUEST_ID_MAX_LENGTH: int = 64
+    # Emit the per-stage latency breakdown as an indented block after the
+    # request line. Readable during development, noise in aggregation — the
+    # same numbers are always on the structured record as "stages".
+    LOG_TIMING_BREAKDOWN: bool = False
+    # Requests slower than this are logged at WARNING instead of INFO, so a
+    # latency regression surfaces without reading every line.
+    SLOW_REQUEST_MS: float = 5_000.0
 
     # -------------------------------------------------------------- storage
     UPLOAD_DIR: Path = Path("/data/uploads")
-    CHROMA_DIR: Path = Path("/data/chroma")
     # Two ways in, checked in this order by app.db.url:
     #   1. DATABASE_URL — a complete URL, which is what managed platforms hand
     #      you. Used verbatim.
@@ -116,18 +132,41 @@ class Settings(BaseSettings):
         "Represent this sentence for searching relevant passages: "
     )
 
-    # ---------------------------------------------------------- vector store
-    CHROMA_COLLECTION_NAME: str = "document_chunks"
-    CHROMA_DISTANCE_METRIC: str = "cosine"
+    # ---------------------------------------------------------- vector index
+    # HNSW build parameters. Higher values build a slower, more accurate graph.
+    # Changing either requires rebuilding the index (see alembic 0003).
+    HNSW_M: int = 16
+    HNSW_EF_CONSTRUCTION: int = 64
+    # Search-time candidate list. Must exceed VECTOR_CANDIDATE_COUNT or the
+    # index cannot return that many neighbours at all.
+    HNSW_EF_SEARCH: int = 100
+    # pgvector applies the WHERE clause *after* walking the graph, so a
+    # single-user query over a many-user corpus can come back short — the same
+    # "filtered remains of a global top-N" failure the design exists to avoid.
+    # Iterative scan makes the index keep walking until it has enough rows that
+    # survive the filter. "relaxed_order" allows slight reordering within the
+    # candidate set in exchange for far fewer wasted scans; RRF consumes ranks
+    # from this list and re-sorts anyway. Requires pgvector >= 0.8.
+    HNSW_ITERATIVE_SCAN: str = "relaxed_order"
+    HNSW_MAX_SCAN_TUPLES: int = 20_000
 
     # ------------------------------------------------------------- retrieval
     VECTOR_CANDIDATE_COUNT: int = 40
-    BM25_CANDIDATE_COUNT: int = 40
-    BM25_K1: float = 1.5
-    BM25_B: float = 0.75
+    LEXICAL_CANDIDATE_COUNT: int = 40
+    # Postgres full-text config used for both indexing and querying. The two
+    # must match: a tsvector built with 'english' will not match a tsquery
+    # parsed with 'simple'.
+    TEXT_SEARCH_CONFIG: str = "english"
+    # ts_rank_cd normalisation flags, OR-ed together. 1 divides the rank by
+    # 1 + log(document length), which is the closest analogue Postgres offers
+    # to BM25's length normalisation (the 'b' parameter). Without it, long
+    # chunks win on raw term frequency alone.
+    TEXT_RANK_NORMALIZATION: int = 1
+    # Guards against a pathological query expanding into a huge tsquery.
+    MAX_QUERY_TERMS: int = 40
     RRF_K: int = 60
     RRF_VECTOR_WEIGHT: float = 1.0
-    RRF_BM25_WEIGHT: float = 0.8
+    RRF_LEXICAL_WEIGHT: float = 0.8
     TOP_K: int = 6
 
     # ------------------------------------------------------------- reranking
@@ -150,13 +189,39 @@ class Settings(BaseSettings):
     # Raise it toward TOP_K to favour pure relevance over coverage.
     MAX_CHUNKS_PER_DOCUMENT: int = 3
 
+    # ------------------------------------------------------------ job queue
+    # Ingestion runs in a separate worker process, so a crash mid-document
+    # cannot take the API down and a restart does not strand the document.
+    # The queue is a Postgres table claimed with SELECT ... FOR UPDATE SKIP
+    # LOCKED: no extra infrastructure, and the claim is transactional, so a
+    # worker that dies holding a job releases it rather than losing it.
+    JOB_POLL_INTERVAL_SECONDS: float = 2.0
+    JOB_MAX_ATTEMPTS: int = 3
+    # Exponential: delay = BACKOFF_BASE * 2 ** (attempts - 1), capped.
+    JOB_BACKOFF_BASE_SECONDS: int = 30
+    JOB_BACKOFF_MAX_SECONDS: int = 900
+    # A running job writes a heartbeat on this interval. If one stops arriving
+    # for JOB_STALE_AFTER_SECONDS the reaper assumes the worker died and
+    # requeues the job. Keep the stale window several multiples of the
+    # heartbeat interval so a slow document is not mistaken for a dead worker.
+    JOB_HEARTBEAT_INTERVAL_SECONDS: float = 15.0
+    JOB_STALE_AFTER_SECONDS: int = 300
+    JOB_REAPER_INTERVAL_SECONDS: float = 60.0
+    # Retain terminal jobs for this long so a failure can be inspected after
+    # the fact, then delete them to keep the table small.
+    JOB_RETENTION_HOURS: int = 168
+
     # ------------------------------------------------------------ generation
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_TEMPERATURE: float = 0.1
     GROQ_MAX_TOKENS: int = 1024
     GROQ_TIMEOUT_SECONDS: float = 60.0
     GROQ_MAX_RETRIES: int = 3
+    # Server-Sent Events keep-alive. Proxies and load balancers close an idle
+    # connection; a comment frame costs nothing and resets their timers while
+    # the model is still thinking.
+    SSE_KEEPALIVE_SECONDS: float = 15.0
 
     # Prompt assembly
     MAX_CONTEXT_CHARS: int = 12_000

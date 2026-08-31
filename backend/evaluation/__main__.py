@@ -20,16 +20,16 @@ from sqlalchemy.orm import Session
 
 from app.db.models import User
 from app.db.session import SessionFactory
-from app.logging_config import configure_logging
+from app.observability.logging_config import configure_logging
 from app.stores import user_repository
 from evaluation.generate import draft_questions
+from evaluation.generation_runner import run_generation_evaluation
 from evaluation.goldset import (
     load_candidates,
     load_goldset,
     save_candidates,
     save_goldset,
 )
-from evaluation.generation_runner import run_generation_evaluation
 from evaluation.report import (
     render_generation_markdown,
     render_markdown,
@@ -57,9 +57,7 @@ def _generate(email: str) -> None:
         user = _resolve_user(session, email)
         questions = draft_questions(session, user.id)
 
-    path = save_candidates(
-        GoldSet(version=1, owner_email=email, questions=questions)
-    )
+    path = save_candidates(GoldSet(version=1, owner_email=email, questions=questions))
     print(f"\nDrafted {len(questions)} candidates -> {path}")
     print("Review them before running the benchmark:")
     print("  python -m evaluation review")

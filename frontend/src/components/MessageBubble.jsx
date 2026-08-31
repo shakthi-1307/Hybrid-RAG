@@ -56,13 +56,28 @@ export function MessageBubble({ message }) {
       );
     });
 
+  // While tokens are still arriving the text is rendered raw. Markers cannot
+  // be resolved yet — validation needs the finished answer, and "[1" is not
+  // yet "[12]" — so treating them as citations mid-stream would flash every
+  // marker from broken to valid as the reply completes.
+  const renderBody = () => {
+    if (isUser) return message.content;
+    if (message.streaming) {
+      return (
+        <>
+          {message.content}
+          <span className="cursor" aria-hidden="true" />
+        </>
+      );
+    }
+    return renderAnswer();
+  };
+
   return (
     <article className={`bubble ${isUser ? 'bubble-user' : 'bubble-assistant'}`}>
       <header className="bubble-role">{isUser ? 'You' : 'Assistant'}</header>
-      <div className="bubble-content">
-        {isUser ? message.content : renderAnswer()}
-      </div>
-      {!isUser && (
+      <div className="bubble-content">{renderBody()}</div>
+      {!isUser && !message.streaming && (
         <CitationList
           citations={message.citations}
           focusedMarker={focusedMarker}

@@ -759,3 +759,31 @@ button:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Streaming caret. Rendered only while tokens are arriving, so its presence
+   is the signal that an answer is still being written — no separate spinner
+   is needed once the first token lands. */
+.cursor {
+  display: inline-block;
+  width: 0.5rem;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: currentColor;
+  opacity: 0.65;
+  animation: cursor-blink 1.1s steps(2, start) infinite;
+}
+
+@keyframes cursor-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+/* Respect a user's reduced-motion preference: a blinking element is a common
+   migraine and vestibular trigger. The caret still shows, it just holds still. */
+@media (prefers-reduced-motion: reduce) {
+  .cursor {
+    animation: none;
+  }
+}

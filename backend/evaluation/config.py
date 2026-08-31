@@ -32,7 +32,7 @@ P95 = 0.95
 # --- RAGAS -------------------------------------------------------------------
 # The judge is deliberately a different, larger model than the one under test
 # would ideally be — a model grading its own output is a weak evaluator.
-RAGAS_JUDGE_MODEL = os.environ.get("RAGAS_JUDGE_MODEL", "llama-3.3-70b-versatile")
+RAGAS_JUDGE_MODEL = os.environ.get("RAGAS_JUDGE_MODEL", "openai/gpt-oss-120b")
 RAGAS_JUDGE_TEMPERATURE = 0.0
 RAGAS_TIMEOUT_SECONDS = 180
 # RAGAS defaults to 16 workers, which trips Groq's rate limit immediately.
