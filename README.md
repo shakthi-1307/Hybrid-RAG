@@ -44,16 +44,16 @@ The API never embeds anything. It writes the file, queues a job, and returns —
 so an API restart mid-ingest cannot strand a document, and a large PDF cannot
 starve request handling. See [The ingestion queue](#the-ingestion-queue).
 
-| Stage       | File                                                      | Responsibility                                                                                                        |
-| ----------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Load        | `ingestion/loaders/pdf_loader.py`, `markdown_loader.py`   | Raw file → ordered `Section`s carrying a heading path                                                                 |
-| Route       | `ingestion/loaders/registry.py`                           | Extension → loader; the only place formats are declared                                                               |
-| Count       | `ingestion/tokenizer.py`                                  | Token counts from the _embedding model's own_ tokenizer                                                               |
-| Chunk       | `ingestion/chunker.py`                                    | Greedy sentence packing to `CHUNK_TARGET_TOKENS`, `CHUNK_OVERLAP_TOKENS` tail carried forward, never across a section |
-| Describe    | `ingestion/metadata.py`                                   | The flat, versioned chunk metadata schema + heading-path codec                                                        |
-| Embed       | `ingestion/embedder.py`                                   | BGE passage/query asymmetry, dimension guard                                                                          |
-| Store       | `stores/document_repository.py`                           | Chunks, embeddings, and status in one transaction                                                                     |
-| Orchestrate | `ingestion/pipeline.py`                                   | Wires the stages, owns status transitions and failure handling                                                        |
+| Stage       | File                                                    | Responsibility                                                                                                        |
+| ----------- | ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Load        | `ingestion/loaders/pdf_loader.py`, `markdown_loader.py` | Raw file → ordered `Section`s carrying a heading path                                                                 |
+| Route       | `ingestion/loaders/registry.py`                         | Extension → loader; the only place formats are declared                                                               |
+| Count       | `ingestion/tokenizer.py`                                | Token counts from the _embedding model's own_ tokenizer                                                               |
+| Chunk       | `ingestion/chunker.py`                                  | Greedy sentence packing to `CHUNK_TARGET_TOKENS`, `CHUNK_OVERLAP_TOKENS` tail carried forward, never across a section |
+| Describe    | `ingestion/metadata.py`                                 | The flat, versioned chunk metadata schema + heading-path codec                                                        |
+| Embed       | `ingestion/embedder.py`                                 | BGE passage/query asymmetry, dimension guard                                                                          |
+| Store       | `stores/document_repository.py`                         | Chunks, embeddings, and status in one transaction                                                                     |
+| Orchestrate | `ingestion/pipeline.py`                                 | Wires the stages, owns status transitions and failure handling                                                        |
 
 A chunk never crosses a heading boundary, which is what makes the citation
 `document → section → page` trustworthy rather than approximate.
@@ -209,12 +209,12 @@ account and a wrong password, so the form cannot be used to enumerate accounts.
 **Isolation is enforced in four independent places**, so no single mistake
 exposes another user's data:
 
-| Layer          | Mechanism                                                                                                                                                                         |
-| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Layer          | Mechanism                                                                                                                                                                                                    |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Vector search  | `WHERE owner_id = ...` is in the same statement as the HNSW scan, with `hnsw.iterative_scan` on, so a filtered query returns the best matches within the filter — not the filtered remains of a global top-N |
 | Lexical search | The owner predicate is applied _before_ the `LIMIT`, so a user's results are never another user's leftovers                                                                                                  |
-| Postgres reads | Every repository query carries `owner_id` in its `WHERE` clause; ownership is enforced by the query, not by the caller                                                            |
-| Hydration      | `get_chunks_by_ids` re-checks ownership even though both searches already filtered, so a future change to either search cannot become a leak                                      |
+| Postgres reads | Every repository query carries `owner_id` in its `WHERE` clause; ownership is enforced by the query, not by the caller                                                                                       |
+| Hydration      | `get_chunks_by_ids` re-checks ownership even though both searches already filtered, so a future change to either search cannot become a leak                                                                 |
 
 Another user's document or chat session returns 404, not 403 — existence itself
 is not disclosed. Uploads are deduplicated **per owner**, so two users
@@ -258,91 +258,6 @@ Insecure cookies and a missing Groq key log loud warnings instead of blocking.
 
 Never hard-code a secret in `config.py` — it is committed. Set it in `.env` or
 your platform's secret store.
-
-### Where secrets live
-
-| Secret              | Source of truth                         | Committed default                              |
-| ------------------- | --------------------------------------- | ---------------------------------------------- |
-| `JWT_SECRET_KEY`    | `.env`                                  | **none — required**; import fails without it   |
-| `GROQ_API_KEY`      | `.env`                                  | empty; warns at startup                        |
-| `POSTGRES_PASSWORD` | `.env`                                  | empty; **compose refuses to start** without it |
-| `DATABASE_URL`      | optional override for managed platforms | unset; assembled from `POSTGRES_*`             |
-
-The connection URL is built in `app/db/url.py` with SQLAlchemy's
-`URL.create`, which escapes each component. It is never string-formatted, so a
-password containing `@`, `:`, `/` or `%` cannot relocate the hostname — the
-failure mode that produces a baffling `Name or service not known`. Both the API
-and Alembic log the sanitised target (`user@host:port/database`) before
-connecting, so a misconfigured URL is visible immediately.
-
-No file in the repository contains a credential that works against anything.
-`.env` is gitignored; `.env.example` holds placeholders only. If a real secret
-has ever been committed, rotate it — removing it from the working tree does not
-remove it from git history.
-
----
-
-## Layout
-
-```
-hybrid-rag/
-├─ docker-compose.yml
-├─ .env.example
-├─ .github/workflows/ci.yml        lint · tests · migrations · image builds
-└─ backend/
-   ├─ alembic/                     migrations
-   ├─ evaluation/                  benchmark harness (not on the request path)
-   │  ├─ generate.py · review.py   gold set drafting and human review
-   │  ├─ metrics.py                Hit@k · MRR · nDCG · Wilson interval
-   │  ├─ citation_metrics.py       exact citation integrity counts
-   │  ├─ configurations.py         the four retrieval ablations
-   │  ├─ ragas_adapter.py          the only file that imports RAGAS
-   │  ├─ answers.py                full-pipeline answer generation
-   │  └─ runner.py · generation_runner.py · report.py
-   ├─ tests/
-   └─ app/
-      ├─ config.py                 EVERY tunable constant, declared once
-      ├─ errors.py                 domain exceptions → HTTP statuses
-      ├─ main.py                   app assembly + lifespan only
-      ├─ worker.py                 `python -m app.worker` entry point
-      ├─ startup_checks.py         fail-closed config validation
-      ├─ db/          session.py · models.py · url.py · pgvector_support.py
-      ├─ observability/            context · timing · logging_config
-      │                            middleware · db_timing
-      ├─ jobs/        queue.py (claim · retry · reap) · worker.py (the loop)
-      ├─ security/    password.py (bcrypt) · tokens.py (JWT) · rate_limit.py
-      ├─ schemas/     auth · document · chat · ingestion · retrieval · health
-      ├─ ingestion/   tokenizer · chunker · metadata · embedder · pipeline
-      │  └─ loaders/  base · pdf_loader · markdown_loader · registry
-      ├─ stores/      document_repository · chat_repository · user_repository
-      ├─ retrieval/   vector_search · lexical_search · fusion · reranker
-      │               diversity · hydration · hybrid_retriever
-      ├─ generation/  prompt · llm · citations
-      ├─ graph/       state · nodes · pipeline
-      └─ api/         deps.py + routes/{auth,documents,chat,health}.py
-└─ frontend/
-   └─ src/
-      ├─ config.js                 every frontend constant
-      ├─ styles.css                dark base · per-document hues
-      ├─ api/client.js             the only module that calls fetch
-      ├─ lib/documentColor.js      stable hue per document id
-      ├─ hooks/       useAuth · useChat · useDocuments
-      └─ components/  LoginPage · Workspace · SessionSidebar · ChatWindow
-                      MessageBubble · CitationList · Composer · DocumentPanel
-```
-
-`App.jsx` only decides _which_ of `LoginPage` or `Workspace` to render.
-`Workspace` is where `useChat` and `useDocuments` live, so those hooks never
-fire a request while signed out. It is keyed on the user id, which discards
-every cached document and conversation when the account changes.
-
-**One responsibility per file.** The chunker does not embed. The embedder does
-not store. The retriever does not score — `lexical_search` and `vector_search`
-score, `fusion` merges, `hybrid_retriever` only coordinates. `pipeline.py`
-files contain wiring and error handling, never algorithms.
-
-**No magic numbers.** `backend/app/config.py` and `frontend/src/config.js` are
-the only files containing literals that a reader might want to change.
 
 ---
 
@@ -460,11 +375,11 @@ buy has nothing to spend itself on.
 
 Three mechanisms stop a crash from stranding a document:
 
-| Mechanism | Covers |
-| --- | --- |
-| The claim is a transaction | A worker killed between claiming and finishing never committed, so the row is untouched |
-| Heartbeats + reaper | A worker killed *after* committing its claim. The reaper requeues jobs whose heartbeat went stale |
-| Bounded attempts | A document that fails every time ends as `dead` with its error recorded, rather than cycling forever |
+| Mechanism                  | Covers                                                                                               |
+| -------------------------- | ---------------------------------------------------------------------------------------------------- |
+| The claim is a transaction | A worker killed between claiming and finishing never committed, so the row is untouched              |
+| Heartbeats + reaper        | A worker killed _after_ committing its claim. The reaper requeues jobs whose heartbeat went stale    |
+| Bounded attempts           | A document that fails every time ends as `dead` with its error recorded, rather than cycling forever |
 
 Failures are classified. `PermanentIngestionError` — an empty PDF, a missing
 file, a deleted document — goes straight to `dead`, because retrying cannot
@@ -546,12 +461,12 @@ regression surfaces without reading every line.
 
 `POST /chat/sessions/{id}/query/stream` returns Server-Sent Events:
 
-| Event | When | Payload |
-| --- | --- | --- |
-| `meta` | once, after retrieval | request id, `grounded`, and the sources retrieved |
-| `token` | many | one content delta |
-| `done` | once | persisted message id, **validated** citations, stage timings |
-| `error` | instead of `done` | a message safe to show the user |
+| Event   | When                  | Payload                                                      |
+| ------- | --------------------- | ------------------------------------------------------------ |
+| `meta`  | once, after retrieval | request id, `grounded`, and the sources retrieved            |
+| `token` | many                  | one content delta                                            |
+| `done`  | once                  | persisted message id, **validated** citations, stage timings |
+| `error` | instead of `done`     | a message safe to show the user                              |
 
 Citation validation is not incremental, and that shapes the protocol. A marker
 is only trustworthy once the full text exists — `[1` is not yet `[12]` — so
@@ -590,7 +505,7 @@ and filtered searches may quietly return fewer candidates than requested.
 
 **The lexical scorer is not BM25.** `ts_rank_cd` has no term-frequency
 saturation and a coarser length normalisation than BM25's `b`. Fusion consumes
-ranks rather than scores, so this matters less than it sounds — but *how much*
+ranks rather than scores, so this matters less than it sounds — but _how much_
 less is an empirical question, and `backend/evaluation` is the tool for
 answering it rather than assuming.
 
@@ -612,14 +527,14 @@ constraint.
 
 ## Tuning notes
 
-| Setting                                           | Effect                                                                                                      |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `CHUNK_TARGET_TOKENS`                             | Larger → more context per hit, fuzzier citations. 512 matches the BGE input window.                         |
-| `CHUNK_OVERLAP_TOKENS`                            | Guards against answers split across a chunk boundary.                                                       |
-| `RRF_K`                                           | Higher flattens the contribution of top ranks; 60 is the value from the original RRF paper.                 |
-| `RRF_LEXICAL_WEIGHT`                              | Below 1.0 favours semantic matching. Raise it for corpora full of exact identifiers, part numbers, or code. |
+| Setting                                              | Effect                                                                                                      |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `CHUNK_TARGET_TOKENS`                                | Larger → more context per hit, fuzzier citations. 512 matches the BGE input window.                         |
+| `CHUNK_OVERLAP_TOKENS`                               | Guards against answers split across a chunk boundary.                                                       |
+| `RRF_K`                                              | Higher flattens the contribution of top ranks; 60 is the value from the original RRF paper.                 |
+| `RRF_LEXICAL_WEIGHT`                                 | Below 1.0 favours semantic matching. Raise it for corpora full of exact identifiers, part numbers, or code. |
 | `VECTOR_CANDIDATE_COUNT` / `LEXICAL_CANDIDATE_COUNT` | Fusion can only rerank what it is given — widen these before widening `TOP_K`.                              |
-| `GROQ_TEMPERATURE`                                | Kept at 0.1: grounded answering wants determinism, not variety.                                             |
+| `GROQ_TEMPERATURE`                                   | Kept at 0.1: grounded answering wants determinism, not variety.                                             |
 
 Changing `EMBEDDING_MODEL_NAME` invalidates the existing index. `Embedder`
 refuses to start if the model's dimension disagrees with `EMBEDDING_DIMENSION`,
