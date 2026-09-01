@@ -213,7 +213,7 @@ class Settings(BaseSettings):
 
     # ------------------------------------------------------------ generation
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "openai/gpt-oss-120b"
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GROQ_TEMPERATURE: float = 0.1
     GROQ_MAX_TOKENS: int = 1024
     GROQ_TIMEOUT_SECONDS: float = 60.0

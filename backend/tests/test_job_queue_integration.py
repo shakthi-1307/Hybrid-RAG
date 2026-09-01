@@ -35,7 +35,12 @@ def pending_document(db_session):
         checksum=uuid.uuid4().hex,
         status=IngestionStatus.PENDING,
     )
-    db_session.add_all([user, document])
+    # Two flushes, not one: without a relationship() between User and Document
+    # SQLAlchemy will not reliably order the users INSERT before the documents
+    # INSERT, and the foreign key fails.
+    db_session.add(user)
+    db_session.flush()
+    db_session.add(document)
     db_session.flush()
     return document
 

@@ -48,6 +48,14 @@ def two_tenants(db_session):
     bob = User(id=uuid.uuid4(), email="bob@example.test", password_hash="x")
     db_session.add_all([alice, bob])
 
+    # Flushed before the documents that reference them. There is no
+    # relationship() between User and Document — ownership is by id, enforced
+    # in the repository layer — and SQLAlchemy derives insert ordering from
+    # relationships. With none declared it has no reason to write users first,
+    # so a single flush can emit the documents INSERT ahead of the users one
+    # and Postgres rejects the foreign key.
+    db_session.flush()
+
     documents = {}
     for owner, name in ((alice, "alice"), (bob, "bob")):
         document = Document(

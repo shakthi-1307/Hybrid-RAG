@@ -58,18 +58,32 @@ def engine():
 
 @pytest.fixture
 def db_session(engine):
-    """A session rolled back after each test, so tests cannot see each other."""
+    """A real session, with the tables emptied after each test.
+
+    The usual trick — open a transaction, bind the session to it, roll back
+    afterwards — does not work here. The job queue commits: that is the point
+    of it, since a claim has to be visible to other workers. A commit inside
+    the surrounding transaction ends it, the rollback then has nothing to undo,
+    and rows leak into the next test while SQLAlchemy warns about a
+    transaction "already deassociated from connection".
+
+    Truncating is slower and completely honest about what the code does.
+    """
+    from sqlalchemy import text
     from sqlalchemy.orm import Session
 
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = Session(bind=connection, expire_on_commit=False)
+    from app.db.models import Base
+
+    session = Session(bind=engine, expire_on_commit=False)
     try:
         yield session
     finally:
         session.close()
-        transaction.rollback()
-        connection.close()
+        # CASCADE so ordering between dependent tables does not matter;
+        # RESTART IDENTITY so sequences do not drift across a run.
+        table_names = ", ".join(table.name for table in Base.metadata.sorted_tables)
+        with engine.begin() as connection:
+            connection.execute(text(f"TRUNCATE {table_names} RESTART IDENTITY CASCADE"))
 
 
 class FakeTokenCounter(TokenCounter):

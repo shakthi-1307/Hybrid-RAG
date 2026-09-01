@@ -101,6 +101,12 @@ def claim_next(session: Session, worker_id: str) -> IngestionJob | None:
     run from several workers at once: each skips rows another has locked
     instead of blocking on them, so N workers pick up N different jobs with no
     coordination between them.
+
+    Due-ness is tested against ``clock_timestamp()`` rather than ``now()``.
+    ``now()`` is transaction start time, frozen for the life of the
+    transaction, so a job that became due while the transaction was open would
+    stay invisible until the next one — and a long-running transaction would
+    hold the whole queue back. ``clock_timestamp()`` reads the real clock.
     """
     claim = text(
         """
@@ -114,7 +120,7 @@ def claim_next(session: Session, worker_id: str) -> IngestionJob | None:
             SELECT id
             FROM ingestion_jobs
             WHERE status = 'queued'
-              AND run_after <= now()
+              AND run_after <= clock_timestamp()
             ORDER BY run_after, created_at
             FOR UPDATE SKIP LOCKED
             LIMIT 1
